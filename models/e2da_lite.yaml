@@ -1,0 +1,39 @@
+nc: 4  # number of classes
+depth_multiple: 1.0  # model depth multiple
+width_multiple: 1.0  # layer channel multiple
+anchors:
+  - [10, 13, 16, 30, 33, 23] # P3/8
+  - [30, 61, 62, 45, 59, 119] # P4/16
+  - [116, 90, 156, 198, 373, 326] # P5/32
+
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, Conv_1, [64, 7, 2]],  # 0
+   [-1, 1, BasicBlock_2, [64, 3, 2]], #1
+   [-1, 1, BasicBlock_2, [64, 3, 1]],
+   [-1, 1, BasicBlock_3, [128, 3, 2]], #3
+   [-1, 1, BasicBlock_2, [128, 3, 1]],
+   [-1, 1, BasicBlock_3, [256, 3, 2]],
+   [-1, 1, BasicBlock_2, [256, 3, 1]],
+   [-1, 1, BasicBlock_3, [512, 3, 2]], #7 
+   [-1, 1, BasicBlock_2, [512, 3, 1]],
+ 
+  ]
+
+head:
+  [[-1, 1, BasicBlock_2, [256, 3, 1]], #9
+   [-1, 1, Conv_2, [512, 3, 1]],  # 10 (P5/32-large)
+
+   [-2, 1, BasicBlock_2, [128, 1, 1]],
+   [-1, 1, Sample, [None, 2, 'nearest']],
+   [[-1, 6], 1, Concat, [2]],  # cat backbone P4
+   [-1, 1, Conv_2, [256, 3, 1]],  # 14 (P4/16-medium)
+
+   [-1, 1, Sample, [None, 2, 'nearest']],
+   [-1, 1, Snn_Conv2d_BN, [128, 1, 1]],
+  #  [4, 1, Snn_Conv2d, [128, 1, 1]],
+   [[-1, 4], 1, Fusion, [256, 3, 2]],
+
+   [[17, 14, 10], 1, Detect, [nc, anchors]],  # Detect(P4, P5)
+  ]
+

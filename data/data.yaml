@@ -1,0 +1,8 @@
+path: COFFEE_FOB  # dataset root dir
+train: train  # train images 1655 images
+val:  val  # val images 473 images
+test: test  # test images 273 images
+
+# Classes
+nc: 4  # number of classes
+names: ['overripe', 'ripe', 'semi_ripe', 'unripe']
