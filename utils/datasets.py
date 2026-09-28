@@ -13,6 +13,7 @@ import time
 from itertools import repeat
 from multiprocessing.pool import Pool, ThreadPool
 from pathlib import Path
+import platform
 from threading import Thread
 from zipfile import ZipFile
 
@@ -110,6 +111,9 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
                                       prefix=prefix)
 
     batch_size = min(batch_size, len(dataset))
+    # macOS 下多进程 DataLoader worker 在解释器退出时可能挂起（waitpid 等待子进程），默认降级为 0
+    if platform.system() == 'Darwin':
+        workers = 0
     nw = min([os.cpu_count() // WORLD_SIZE, batch_size if batch_size > 1 else 0, workers])  # number of workers
     sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle)
     loader = DataLoader if image_weights else InfiniteDataLoader  # only DataLoader allows for attribute updates

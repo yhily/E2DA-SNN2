@@ -23,10 +23,16 @@ from zipfile import ZipFile
 import cv2
 import numpy as np
 import pandas as pd
-import pkg_resources as pkg
 import torch
 import torchvision
 import yaml
+
+from packaging.version import parse as parse_version
+from packaging.requirements import Requirement as _Requirement
+try:  # Python >= 3.8
+    from importlib.metadata import version as _dist_version, PackageNotFoundError as _PkgNotFound
+except ImportError:  # Python 3.7 fallback
+    from importlib_metadata import version as _dist_version, PackageNotFoundError as _PkgNotFound
 
 from utils.downloads import gsutil_getsize
 from utils.metrics import box_iou, fitness
@@ -247,8 +253,8 @@ def check_python(minimum='3.6.2'):
 
 
 def check_version(current='0.0.0', minimum='0.0.0', name='version ', pinned=False, hard=False):
-    # Check version vs. required version
-    current, minimum = (pkg.parse_version(x) for x in (current, minimum))
+    # Check version vs. required version (packaging, 不依赖已弃用的 pkg_resources)
+    current, minimum = (parse_version(x) for x in (current, minimum))
     result = (current == minimum) if pinned else (current >= minimum)  # bool
     if hard:  # assert min requirements met
         assert result, f'{name}{minimum} required by YOLOv3, but {name}{current} is currently installed'
@@ -264,16 +270,32 @@ def check_requirements(requirements=ROOT / 'requirements.txt', exclude=(), insta
     if isinstance(requirements, (str, Path)):  # requirements.txt file
         file = Path(requirements)
         assert file.exists(), f"{prefix} {file.resolve()} not found, check failed."
+        reqs = []
         with file.open() as f:
-            requirements = [f'{x.name}{x.specifier}' for x in pkg.parse_requirements(f) if x.name not in exclude]
+            for line in f:
+                line = line.split('#', 1)[0].strip()  # strip inline comments
+                if line:
+                    reqs.append(line)
     else:  # list or tuple of packages
-        requirements = [x for x in requirements if x not in exclude]
+        reqs = list(requirements)
 
     n = 0  # number of packages updates
-    for r in requirements:
+    for r in reqs:
+        name = r.split('>=')[0].split('==')[0].split('<')[0].split('~=')[0].strip()
+        if name in exclude:
+            continue
         try:
-            pkg.require(r)
-        except Exception as e:  # DistributionNotFound or VersionConflict if requirements not met
+            req = _Requirement(r) if (not r.startswith('-') and not r.startswith('/')) else None
+        except Exception:
+            req = None
+        try:
+            installed = _dist_version(req.name if req is not None else name)
+        except _PkgNotFound:
+            installed = None
+        ok = False
+        if installed is not None:
+            ok = True if req is None else parse_version(installed) in req.specifier
+        if not ok:
             s = f"{prefix} {r} not found and is required by YOLOv3"
             if install:
                 print(f"{s}, attempting auto-update...")
@@ -745,7 +767,7 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
 
 def strip_optimizer(f='best.pt', s=''):  # from utils.general import *; strip_optimizer()
     # Strip optimizer from 'f' to finalize training, optionally save as 's'
-    x = torch.load(f, map_location=torch.device('cpu'))
+    x = torch.load(f, map_location=torch.device('cpu'), weights_only=False)
     if x.get('ema'):
         x['model'] = x['ema']  # replace model with ema
     for k in 'optimizer', 'training_results', 'wandb_id', 'ema', 'updates':  # keys

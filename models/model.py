@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 # ROOT = ROOT.relative_to(Path.cwd())  # relative
 
 from models.modules import *
+from models.snn_layers import TIME_WINDOW  # 时间窗唯一来源（默认 4）
 
 from models.experimental import *
 from utils.autoanchor import check_anchor_order
@@ -23,7 +24,8 @@ try:
     import thop  # for FLOPs computation
 except ImportError:
     thop = None
-time_window= 4
+
+time_window = TIME_WINDOW  # 向后兼容别名（旧代码引用 models.model.time_window）
 
 class Detect(nn.Module):
     stride = None  # strides computed during build
@@ -69,10 +71,7 @@ class Detect(nn.Module):
 
     def _make_grid(self, nx=20, ny=20, i=0):
         d = self.anchors[i].device
-        if check_version(torch.__version__, '1.10.0'):  # torch>=1.10.0 meshgrid workaround for torch>=0.7 compatibility
-            yv, xv = torch.meshgrid([torch.arange(ny).to(d), torch.arange(nx).to(d)], indexing='ij')
-        else:
-            yv, xv = torch.meshgrid([torch.arange(ny).to(d), torch.arange(nx).to(d)])
+        yv, xv = torch.meshgrid([torch.arange(ny).to(d), torch.arange(nx).to(d)], indexing='ij')  # torch>=1.10
         grid = torch.stack((xv, yv), 2).expand((1, self.na, ny, nx, 2)).float()
         anchor_grid = (self.anchors[i].clone() * self.stride[i]) \
             .view((1, self.na, 1, 1, 2)).expand((1, self.na, ny, nx, 2)).float()
@@ -101,6 +100,7 @@ class Model(nn.Module):
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
         self.inplace = self.yaml.get('inplace', True)
+        self.time_window = int(self.yaml.get('time_window', TIME_WINDOW))  # SNN 时间窗（可在 yaml 覆盖）
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
@@ -119,9 +119,8 @@ class Model(nn.Module):
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False):
-        input = torch.zeros(time_window, x.size()[0], x.size()[1], x.size()[2], x.size()[3], device=x.device)
-        for i in range(time_window):
-            input[i] = x
+        # 将输入在时间维平铺 time_window 次：(B, C, H, W) -> (T, B, C, H, W)
+        input = x.unsqueeze(0).repeat(self.time_window, 1, 1, 1, 1)
 
         if augment:
             return self._forward_augment(x)  # augmented inference, None
@@ -134,6 +133,7 @@ class Model(nn.Module):
         y = []  # outputs
         for si, fi in zip(s, f):
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
+            xi = xi.unsqueeze(0).repeat(self.time_window, 1, 1, 1, 1)  # tile time steps (SNN 需要 5D 输入)
             yi = self._forward_once(xi)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
             yi = self._descale_pred(yi, fi, si, img_size)
@@ -187,13 +187,11 @@ class Model(nn.Module):
         return y
 
     def _profile_one_layer(self, m, x, dt):
-        # print(type(x))  # 应该输出 <class 'torch.Tensor'>
-
         c = isinstance(m, Detect)  # is final layer, copy input as inplace fix
-        o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPs
+        o = thop.profile(m, inputs=(x.clone() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPs
         t = time_sync()
         for _ in range(10):
-            m(x.copy() if c else x)
+            m(x.clone() if c else x)
         dt.append((time_sync() - t) * 100)
         if m == self.model[0]:
             LOGGER.info(f"{'time (ms)':>10s} {'GFLOPs':>10s} {'params':>10s}  {'module'}")
@@ -223,10 +221,10 @@ class Model(nn.Module):
     #         if type(m) is Bottleneck:
     #             LOGGER.info('%10.3g' % (m.w.detach().sigmoid() * 2))  # shortcut weights
 
-    def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
+    def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers (仅标准 2D Conv+BN，SNN 3D BN 不可融合)
         LOGGER.info('Fusing layers... ')
         for m in self.model.modules():
-            if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
+            if isinstance(m, Conv) and hasattr(m, 'bn'):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
                 delattr(m, 'bn')  # remove batchnorm
                 m.forward = m.forward_fuse  # update forward
@@ -270,18 +268,18 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                 pass
 
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
-        if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
-                 BottleneckCSP, C3, C3TR, C3SPP, C3Ghost,Conv_2,
-                 BasicBlock,BasicBlock_1,BasicBlock_2,BasicBlock_GAC,BasicBlock_TCJA,Conv_A,
-                 ConcatBlock_ms,BasicBlock_ms,Conv_1,Concat_res2]:
-            c1, c2 = ch[f], args[0]
+        # 仅保留本仓库实际定义并被 yaml 使用的模块（原列表引用了大量不存在的 YOLOv5 类）
+        if m in [Conv, Conv_A, Conv_1, Conv_2, Snn_Conv2d_BN, Pools, BasicBlock, BasicBlock_1,
+                 BasicBlock_2, BasicBlock_3, Fusion, CrossConv, MixConv2d]:
+            c2 = args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
-            args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3, C3TR, C3Ghost]:
-                args.insert(2, n)  # number of repeats
-                n = 1
+            if m is Fusion:
+                # Fusion(c2, kernel, ratio)：args 已是完整签名（多路输入 f 为列表，不参与参数构造）
+                pass
+            else:
+                args = [ch[f], c2, *args[1:]]
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:

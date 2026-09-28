@@ -13,7 +13,6 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import yaml
-from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD, Adam, lr_scheduler
 from tqdm import tqdm
@@ -22,7 +21,6 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import val  # for end-of-epoch mAP
 from models.experimental import attempt_load
@@ -44,6 +42,14 @@ from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_devic
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
+
+
+class Loggers:
+    """最小日志器兼容层：W&B/Comet 等云端日志集成已从本仓库裁剪，
+    原 train.py 仍调用 Loggers() 并访问 loggers.wandb，这里保留接口并返回 None。"""
+
+    def __init__(self, save_dir=None, weights=None, opt=None, hyp=None, logger=None):
+        self.wandb = None
 
 
 def train(hyp,  # path/to/hyp.yaml or hyp dictionary
@@ -103,7 +109,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     if pretrained:#false不执行这里
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        ckpt = torch.load(weights, map_location=device, weights_only=False)  # load checkpoint (checkpoints contain nn.Module)
         model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
         csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
@@ -245,6 +251,14 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights对每个类别进行加权。DVS就两类，不需要加权，考虑删除
     model.names = names
 
+    # PyTorch 2.0+: 可选 torch.compile（仅在非 DDP 时启用；失败自动回退到普通模型）
+    if opt.compile and not (cuda and RANK != -1):
+        try:
+            model = torch.compile(model, mode=opt.compile)
+            LOGGER.info(f'Compiling model with torch.compile(mode={opt.compile})...')
+        except Exception as e:
+            LOGGER.warning(f'torch.compile() failed ({e}); continuing without compilation')
+
     # Start training
     t0 = time.time()
     nw = max(round(hyp['warmup_epochs'] * nb), 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
@@ -253,7 +267,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
-    scaler = amp.GradScaler(enabled=cuda)
+    scaler = torch.amp.GradScaler('cuda', enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -274,7 +288,6 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
         mloss = torch.zeros(3, device=device)  # mean losses
-        print("-----------device:",device)
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
         pbar = enumerate(train_loader)
@@ -306,7 +319,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
             # Forward
-            with amp.autocast(enabled=cuda):
+            with torch.autocast(device_type='cuda', enabled=cuda):
                 pred = model(imgs)  # forward
                 # print(targets.to(device).shape)
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
@@ -435,7 +448,7 @@ def parse_opt(known=False):
     parser.add_argument('--weights', type=str, default=ROOT / 'best.pt', help='initial weights path')
     parser.add_argument('--cfg', type=str, default=ROOT / 'models/e2da.yaml', help='model.yaml path')
     parser.add_argument('--data', type=str, default=ROOT / 'dataset.yaml', help='dataset.yaml path')
-    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.yaml', help='hyperparameters path')
+    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyp.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch-size', type=int, default=2, help='total batch size for all GPUs, -1 for autobatch')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
@@ -462,6 +475,9 @@ def parse_opt(known=False):
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='Label smoothing epsilon')
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
+    parser.add_argument('--compile', type=str, nargs='?', const='default', default=None,
+                        help='torch.compile mode: default, reduce-overhead, or max-autotune (PyTorch 2.0+)')
+
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
 

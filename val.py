@@ -14,7 +14,6 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 # from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
@@ -67,7 +66,7 @@ def process_batch(detections, labels, iouv):
             matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
             # matches = matches[matches[:, 2].argsort()[::-1]]
             matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
-        matches = torch.Tensor(matches).to(iouv.device)
+        matches = torch.as_tensor(matches, device=iouv.device)
         correct[matches[:, 1].long()] = matches[:, 2:3] >= iouv
     return correct
 
@@ -194,7 +193,7 @@ def run(data,
 
             if len(pred) == 0:
                 if nl:
-                    stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
+                    stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.empty(0), torch.empty(0), tcls))
                 continue
 
             # Predictions

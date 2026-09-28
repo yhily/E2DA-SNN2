@@ -17,7 +17,6 @@ import requests
 import torch
 import torch.nn as nn
 from PIL import Image
-from torch.cuda import amp
 from utils.plots import Annotator, colors, save_one_box
 
 
@@ -29,10 +28,8 @@ from utils.general import (LOGGER, check_requirements, check_suffix, colorstr, i
                            non_max_suppression, scale_coords, xywh2xyxy, xyxy2xywh)
 from utils.torch_utils import copy_attr
 
-from snn_layers import *
+from models.snn_layers import *  # THRESH/LENS/DECAY/TIME_WINDOW 及 SNN 层（checkpoint 类路径不变）
 
-thresh = 0.5  # 0.5 # neuronal threshold
-time_window = 2
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     """Automatically calculates same shape padding for convolutional layers, optionally adjusts for dilation."""
     if d > 1:
@@ -110,56 +107,69 @@ class Conv_2(nn.Module):
         return self.conv(x)
 
 
-class Pools(nn.Module):
-    def __init__(self,kernel_size,stride,padding=0,dilation=1):
+class Snn_Conv2d_BN(nn.Module):
+    """SNN 卷积 + 时空 BatchNorm（无激活）。
+
+    e2da.yaml / e2da_lite.yaml 的 head 中引用了该模块，但原仓库从未定义，
+    导致模型构建时 eval('Snn_Conv2d_BN') 抛 NameError。此处补齐定义。
+    """
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
-        self.kernel_size=kernel_size
+        self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
+        self.bn = batch_norm_2d(c2)
+
+    def forward(self, x):
+        return self.bn(self.conv(x))
+
+    def forward_fuse(self, x):
+        return self.conv(x)
+
+
+class Pools(nn.Module):
+    def __init__(self, kernel_size, stride, padding=0, dilation=1):
+        super().__init__()
+        self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
-        self.pool=nn.MaxPool2d(kernel_size=self.kernel_size,stride=self.stride,padding=self.padding)
+        self.pool = nn.MaxPool2d(kernel_size=self.kernel_size, stride=self.stride, padding=self.padding)
 
-    def forward(self,input):
-        h=int((input.size()[3]+2*self.padding-self.dilation*(self.kernel_size-1)-1)/self.stride+1)
-        w=int((input.size()[4]+2*self.padding - self.dilation*(self.kernel_size-1)-1)/self.stride+1)
-        c1 = torch.zeros(time_window, input.size()[1],input.size()[2],h,w,device=input.device)
-        for i in range(time_window):
-            c1[i]=self.pool(input[i])
-        return c1
+    def forward(self, input):
+        # 输入 (T, B, C, H, W)：合并时间维为一批做一次池化，再还原形状
+        T, B = input.shape[0], input.shape[1]
+        x = input.reshape(T * B, *input.shape[2:])
+        y = self.pool(x)
+        return y.view(T, B, *y.shape[1:])
 
 class zeropad(nn.Module):
-    def __init__(self,padding):
+    def __init__(self, padding):
         super().__init__()
-        self.padding=padding
-        self.pad=nn.ZeroPad2d(padding=self.padding)
-    def forward(self,input):
-        h=input.size()[3]+self.padding[2]+self.padding[3]
-        w=input.size()[4]+self.padding[0]+self.padding[1]
-        c1=torch.zeros(time_window,input.size()[1],input.size()[2],h,w,device=input.device )
-        for i in range(time_window):
-            c1[i]=self.pad(input[i])
-        return c1 
+        self.padding = padding
+        self.pad = nn.ZeroPad2d(padding=self.padding)
+
+    def forward(self, input):
+        T, B = input.shape[0], input.shape[1]
+        x = input.reshape(T * B, *input.shape[2:])
+        y = self.pad(x)
+        return y.view(T, B, *y.shape[1:])
 
 
 class Sample(nn.Module):
-    def __init__(self,size=None,scale_factor=None,mode='nearset'):
+    def __init__(self, size=None, scale_factor=None, mode='nearest'):
         super(Sample, self).__init__()
-        self.scale_factor=scale_factor
-        self.mode=mode
+        self.scale_factor = scale_factor
+        self.mode = mode
         self.size = size
-        self.up=nn.Upsample(self.size,self.scale_factor,mode=self.mode)
-   
 
-    def forward(self,input):
-        # self.cpu()
-        temp=torch.zeros(time_window,input.size()[1],input.size()[2],input.size()[3]*self.scale_factor,input.size()[4]*self.scale_factor, device=input.device)
-        # print(temp.device,'-----')
-        for i in range(time_window):
-            
-            temp[i]=self.up(input[i])
-
-            # temp[i]= F.interpolate(input[i], scale_factor=self.scale_factor,mode='nearest')
-        return temp
+    def forward(self, input):
+        T, B = input.shape[0], input.shape[1]
+        if self.scale_factor is not None:
+            size = (int(input.shape[3] * self.scale_factor), int(input.shape[4] * self.scale_factor))
+        else:
+            size = self.size
+        x = input.reshape(T * B, *input.shape[2:])
+        y = F.interpolate(x, size=size, mode=self.mode)
+        return y.view(T, B, *y.shape[1:])
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels,kernel=3, stride=1,e=0.5):
@@ -328,10 +338,12 @@ class Fusion(nn.Module):
         self.sigmoid = nn.Sigmoid()
         # self.scattering = Scattering2D(J=2, shape=(32,32)) 
 
-    def forward(self, x0, x1):
-        b,t, _,_,_ = x0.shape
-        x0 = x0.flatten(0,1)
-        x1 = x1.flatten(0,1)
+    def forward(self, x):
+        # 与 Concat/Detect 一致：多路输入以列表传入，x = [x0, x1]
+        x0, x1 = x
+        b, t, _, _, _ = x0.shape
+        x0 = x0.flatten(0, 1)
+        x1 = x1.flatten(0, 1)
         # x0 = self.adjust_conv(x0)
                 # ===> 🔥 Scattering Transform
         # x0_scat = self.scattering(x0)
@@ -655,7 +667,7 @@ class DetectMultiBackend(nn.Module):
             y = self.model.predict({"image": im})  # coordinates are xywh normalized
             if "confidence" in y:
                 box = xywh2xyxy(y["coordinates"] * [[w, h, w, h]])  # xyxy pixels
-                conf, cls = y["confidence"].max(1), y["confidence"].argmax(1).astype(np.float)
+                conf, cls = y["confidence"].max(1), y["confidence"].argmax(1).astype(np.float64)
                 y = np.concatenate((box, conf.reshape(-1, 1), cls.reshape(-1, 1)), 1)
             else:
                 y = list(reversed(y.values()))  # reversed for segmentation models (pred, proto)
@@ -717,10 +729,11 @@ class DetectMultiBackend(nn.Module):
         See `export_formats` for all.
         """
         # types = [pt, jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle]
-        from export import export_formats
+        # 原实现依赖仓库中不存在的 export.py，改为内联后缀表
         from utils.downloads import is_url
 
-        sf = list(export_formats().Suffix)  # export suffixes
+        sf = ['.pt', '.torchscript', '.onnx', '.xml', '.engine', '.mlmodel',
+              '_saved_model', '.pb', '.tflite', '_edgetpu.tflite', '.tfjs', '_paddle_model']  # export suffixes
         if not is_url(p, check=False):
             check_suffix(p, sf)  # checks
         url = urlparse(p)  # if url may be Triton inference server
@@ -796,7 +809,7 @@ class AutoShape(nn.Module):
             p = next(self.model.parameters()) if self.pt else torch.empty(1, device=self.model.device)  # param
             autocast = self.amp and (p.device.type != "cpu")  # Automatic Mixed Precision (AMP) inference
             if isinstance(ims, torch.Tensor):  # torch
-                with amp.autocast(autocast):
+                with torch.amp.autocast('cuda', enabled=autocast):
                     return self.model(ims.to(p.device).type_as(p), augment=augment)  # inference
 
             # Pre-process
@@ -823,7 +836,7 @@ class AutoShape(nn.Module):
             x = np.ascontiguousarray(np.array(x).transpose((0, 3, 1, 2)))  # stack and BHWC to BCHW
             x = torch.from_numpy(x).to(p.device).type_as(p) / 255  # uint8 to fp16/32
 
-        with amp.autocast(autocast):
+        with torch.amp.autocast('cuda', enabled=autocast):
             # Inference
             with dt[1]:
                 y = self.model(x, augment=augment)  # forward

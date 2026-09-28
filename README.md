@@ -13,10 +13,9 @@ The code is released to support reproducibility of the experimental results repo
 
 The code has been tested with the following environment:
 
-- Python: 3.8  
-- PyTorch: 1.10.0  
-- CUDA: 11.3  
-- cuDNN: 8.2.0  
+- Python: >= 3.8 (推荐 3.10+)
+- PyTorch: >= 2.0（已适配 2.0+，验证环境：PyTorch 2.9 / Python 3.13）
+- CUDA: 11.7+（2.x 对应版本）
 
 <details open>
 <summary>Install</summary>
@@ -24,6 +23,16 @@ The code has been tested with the following environment:
 ```bash
 pip install -r requirements.txt
 ```
+
+</details>
+
+### SNN 时间窗（Time Window）
+
+所有 SNN 层（`mem_update`、`Snn_Conv2d`、`Pools`、`Sample` 等）的时间步数现在统一从
+输入张量第 0 维动态推导，唯一的时间窗常量为 `models/snn_layers.py` 中的 `TIME_WINDOW`（默认 4），
+可通过模型 yaml 的 `time_window` 字段覆盖（如 `time_window: 2`）。
+原代码中 `snn_layers.py`(2)、`modules.py`(2)、`model.py`(4) 各有一份互不相同的 `time_window`，
+会导致模型只消费前 2 个时间步，本仓库已统一修复。
 
 </details>
 
@@ -52,6 +61,10 @@ python train.py --cfg models/e2da.yaml --data data.yaml --weights path/to/weight
 Train the lightweight E2DA-Lite model:
 ```bash
 python train.py --cfg models/e2da_lite.yaml --data data.yaml --weights path/to/weights.pt
+```
+可选（PyTorch 2.0+）：使用 `torch.compile` 加速训练（单卡/CPU，失败自动回退）：
+```bash
+python train.py --cfg models/e2da.yaml --data data.yaml --compile default
 ```
 
 </details>

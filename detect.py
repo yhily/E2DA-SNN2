@@ -11,7 +11,6 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 # from visualizer.visualizer.visualizer import get_local
 # get_local.activate()
@@ -110,14 +109,7 @@ def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.model.parameters())))  # warmup
     dt, seen = [0.0, 0.0, 0.0], 0
-    FR=[]
-    SZ=[]
-    # get_local.clear()
-    g=0
     for path, im, im0s, vid_cap, s in dataset:
-        g+=1
-        if g>2000:
-            break
         t1 = time_sync()
         im = torch.from_numpy(im).to(device)#shape:[3,480,640]
 
@@ -234,7 +226,6 @@ def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
                 cv2.waitKey(1)  # 1 millisecond
 
             # Save results (image with detections)
-            save_img=True
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)
@@ -252,10 +243,6 @@ def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
                             save_path += '.mp4'
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
-    firerate=np.array(FR)
-    size=np.array(SZ)
-    np.save('firerate10_5.npy',firerate)
-    np.save('size10_5.npy',size)
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
     LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
