@@ -93,8 +93,16 @@ def exif_transpose(image):
     return image
 
 
+def seed_worker(worker_id):
+    """Seed NumPy and Python RNGs from the seed assigned by PyTorch."""
+    worker_seed = torch.initial_seed() % 2 ** 32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=None, augment=False, cache=False, pad=0.0,
-                      rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix='', shuffle=False):
+                      rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix='', shuffle=False,
+                      seed=0):
     if rect and shuffle:
         LOGGER.warning('WARNING: --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
@@ -115,7 +123,9 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
     if platform.system() == 'Darwin':
         workers = 0
     nw = min([os.cpu_count() // WORLD_SIZE, batch_size if batch_size > 1 else 0, workers])  # number of workers
-    sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle, seed=seed)
     loader = DataLoader if image_weights else InfiniteDataLoader  # only DataLoader allows for attribute updates
     return loader(dataset,
                   batch_size=batch_size,
@@ -123,6 +133,8 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
                   num_workers=nw,
                   sampler=sampler,
                   pin_memory=True,
+                  worker_init_fn=seed_worker,
+                  generator=generator,
                   collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn), dataset
 
 

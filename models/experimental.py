@@ -7,6 +7,7 @@ import torch.nn as nn
 # 星号导入丢失 CrossConv/MixConv2d 的循环导入问题；类对象与 models.model.Conv 完全相同）
 from models.modules import Conv
 from utils.downloads import attempt_download
+from utils.general import torch_load
 
 
 class CrossConv(nn.Module):
@@ -91,7 +92,7 @@ def attempt_load(weights, device=None, inplace=True, fuse=True):
 
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
-        ckpt = torch.load(attempt_download(w), map_location="cpu", weights_only=False)  # load
+        ckpt = torch_load(attempt_download(w), map_location="cpu")  # load trusted checkpoint
         ckpt = (ckpt.get("ema") or ckpt["model"]).to(device).float()  # FP32 model
 
         # Model compatibility updates

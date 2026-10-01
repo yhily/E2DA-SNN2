@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import os
 import random
@@ -35,7 +36,7 @@ from utils.downloads import attempt_download
 from utils.general import (LOGGER, NCOLS, check_dataset, check_file, check_git_status, check_img_size,
                            check_requirements, check_suffix, check_yaml, colorstr, get_latest_run, increment_path,
                            init_seeds, intersect_dicts, labels_to_class_weights, labels_to_image_weights,
-                           one_cycle, print_args, print_mutation, strip_optimizer)
+                           one_cycle, print_args, print_mutation, strip_optimizer, torch_load)
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve, plot_labels
@@ -74,7 +75,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     # Config
     plots = not evolve  # create plots
     cuda = device.type != 'cpu'
-    init_seeds(1 + RANK)
+    run_seed = opt.seed + max(RANK, 0)
+    init_seeds(run_seed, deterministic=opt.deterministic)
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = check_dataset(data)
     train_path, val_path = data_dict['train'], data_dict['val']
@@ -89,7 +91,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        ckpt = torch_load(weights, map_location=device)  # load trusted checkpoint
         model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
         csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
@@ -189,7 +191,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     train_loader, dataset = create_dataloader(train_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
                                               hyp=hyp, augment=True, cache=opt.cache, rect=opt.rect, rank=LOCAL_RANK,
                                               workers=workers, image_weights=opt.image_weights, quad=opt.quad,
-                                              prefix=colorstr('train: '), shuffle=True)
+                                              prefix=colorstr('train: '), shuffle=True, seed=run_seed)
     mlc = int(np.concatenate(dataset.labels, 0)[:, 0].max())  # max label class==79
     nb = len(train_loader)  # number of batches==118287
     assert mlc < nc, f'Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}'
@@ -199,7 +201,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         val_loader = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE , gs, single_cls,
                                        hyp=hyp, cache=None if noval else opt.cache, rect=True, rank=-1,
                                        workers=workers, pad=0.5,
-                                       prefix=colorstr('val: '))[0]
+                                       prefix=colorstr('val: '), seed=run_seed)[0]
 
         if not resume:
             labels = np.concatenate(dataset.labels, 0)
@@ -358,7 +360,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                         'ema': deepcopy(ema.ema),
                         'updates': ema.updates,
                         'optimizer': optimizer.state_dict(),
-                        'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
+                        'wandb_id': None,
                         'date': datetime.now().isoformat()}
 
                 # Save last, best and delete
@@ -409,8 +411,32 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     if is_coco:
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
 
+        metric_names = ('precision', 'recall', 'map50', 'map50_95',
+                        'val_box_loss', 'val_obj_loss', 'val_cls_loss')
+        elapsed_seconds = time.time() - t0
+        metrics = {name: float(value) for name, value in zip(metric_names, results)}
+        metrics.update({
+            'seed': int(opt.seed),
+            'deterministic': bool(opt.deterministic),
+            'epochs_completed': int(epoch - start_epoch + 1),
+            'elapsed_seconds': float(elapsed_seconds),
+            'device': str(device),
+            'torch_version': torch.__version__,
+            'cuda_version': torch.version.cuda,
+            'configuration': str(opt.cfg),
+            'dataset': str(opt.data),
+            'hyperparameters': str(opt.hyp),
+            'initial_weights': str(opt.weights),
+            'image_size': int(imgsz),
+            'batch_size': int(batch_size),
+            'epochs_requested': int(epochs),
+        })
+        with open(save_dir / 'metrics.json', 'w') as f:
+            json.dump(metrics, f, indent=2)
+
         callbacks.run('on_train_end', last, best, plots, epoch, results)
         LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
+        LOGGER.info(f"Final metrics saved to {save_dir / 'metrics.json'}")
 
     torch.cuda.empty_cache()
     return results
@@ -448,6 +474,8 @@ def parse_opt(known=False):
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='Label smoothing epsilon')
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
+    parser.add_argument('--seed', type=int, default=1, help='random seed for initialization, augmentation, and sampling')
+    parser.add_argument('--deterministic', action='store_true', help='favor deterministic kernels over training speed')
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
 
@@ -456,6 +484,11 @@ def parse_opt(known=False):
 
 
 def main(opt, callbacks=Callbacks()):
+    # Backward-compatible defaults for checkpoints created before these
+    # reproducibility options were introduced.
+    opt.seed = getattr(opt, 'seed', 1)
+    opt.deterministic = getattr(opt, 'deterministic', False)
+
     # Checks
     if RANK in [-1, 0]:
         print_args(FILE.stem, opt)

@@ -36,7 +36,9 @@ over `T=2` simulation steps before feature extraction.
 ```text
 E2DA-SNN/
 ├── data/                  # dataset and hyperparameter YAML files
+├── experiments/           # repeated-run and device-benchmark protocol
 ├── models/                # E2DA-SNN architecture and spiking layers
+├── tools/                 # experiment orchestration and benchmarking
 ├── utils/                 # data loading, losses, metrics, and plotting
 ├── train.py               # training entry point
 ├── val.py                 # validation and test entry point
@@ -108,7 +110,8 @@ python train.py \
   --epochs 100 \
   --batch-size 4 \
   --imgsz 640 \
-  --device 0
+  --device 0 \
+  --seed 1
 ```
 
 Train the lightweight model by replacing the configuration:
@@ -118,7 +121,31 @@ python train.py --cfg models/e2da_lite.yaml --data data/data.yaml --weights ''
 ```
 
 To fine-tune a checkpoint, pass its path to `--weights`. Training outputs are
-written to `runs/train/` by default.
+written to `runs/train/` by default. Every completed run also writes a
+`metrics.json` file containing the final precision, recall, mAP, validation
+losses, seed, environment, and elapsed time.
+
+## Repeated-run uncertainty
+
+Run three independent trainings while keeping every setting except the random
+seed fixed:
+
+```bash
+python tools/repeat_train.py \
+  --seeds 1 2 3 \
+  --cfg models/e2da.yaml \
+  --data data/data.yaml \
+  --hyp data/hyp.yaml \
+  --epochs 100 \
+  --batch-size 4 \
+  --device 0 \
+  --deterministic
+```
+
+The runner creates per-seed records, mean and sample-standard-deviation
+summaries, and a generated LaTeX table under `runs/repeated/`. See
+[`experiments/README.md`](experiments/README.md) for the fixed-control protocol
+and interpretation limits.
 
 ## Evaluation
 
@@ -147,6 +174,24 @@ python detect.py \
 Predictions are saved under `runs/detect/` unless another output directory is
 specified.
 
+## Device latency and power
+
+Measure synchronized, model-forward latency with a trained checkpoint:
+
+```bash
+python tools/benchmark_device.py \
+  --weights weights/e2da.pt \
+  --device 0 \
+  --imgsz 640 \
+  --batch-size 1
+```
+
+On NVIDIA Jetson, add `--power-backend tegrastats` to sample `VDD_IN` board
+input power. On a discrete NVIDIA GPU, `--power-backend nvidia-smi` samples GPU
+power only. The generated JSON and CSV files record the device, software,
+precision, warm-up, number of timed iterations, latency distribution, power
+scope, and energy per image when power samples are available.
+
 ## Reproducibility notes
 
 - The public datasets contain static images; they are replicated across time
@@ -157,6 +202,8 @@ specified.
   be kept fixed when comparing ablations.
 - Random seeds improve repeatability but do not guarantee bitwise-identical
   CUDA results across hardware or software versions.
+- Operation-count energy, Jetson board-input power, and discrete-GPU power are
+  different quantities and must not be presented as interchangeable.
 
 ## Acknowledgements
 

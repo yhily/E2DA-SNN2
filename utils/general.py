@@ -121,14 +121,42 @@ def print_args(name, opt):
     LOGGER.info(colorstr(f'{name}: ') + ', '.join(f'{k}={v}' for k, v in vars(opt).items()))
 
 
-def init_seeds(seed=0):
-    # Initialize random number generator (RNG) seeds https://pytorch.org/docs/stable/notes/randomness.html
-    # cudnn seed 0 settings are slower and more reproducible, else faster and less reproducible
+def init_seeds(seed=0, deterministic=False):
+    """Initialize Python, NumPy, and PyTorch random number generators.
+
+    ``deterministic=True`` favors repeatability over throughput. Exact bitwise
+    agreement is still not guaranteed across PyTorch, CUDA, driver, and
+    hardware versions.
+    """
     import torch.backends.cudnn as cudnn
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    cudnn.benchmark, cudnn.deterministic = (False, True) if seed == 0 else (True, False)#benchmark提升运行效率，输入每次iteration变化，会寻找最优配置，降低运行效率，关闭就是为了复现代码保持一致
+    torch.cuda.manual_seed_all(seed)
+    cudnn.benchmark = not deterministic
+    cudnn.deterministic = deterministic
+    if deterministic and hasattr(torch, 'use_deterministic_algorithms'):
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except TypeError:
+            # PyTorch 1.10 does not expose ``warn_only`` on every build. cuDNN
+            # determinism is still enabled without turning unsupported ops
+            # into hard failures.
+            pass
+
+
+def torch_load(file, map_location=None):
+    """Load a trusted full-model checkpoint across PyTorch versions.
+
+    E2DA-SNN checkpoints serialize model objects, so PyTorch 2.6+ requires an
+    explicit ``weights_only=False``. Only load checkpoints from trusted
+    sources.
+    """
+    try:
+        return torch.load(file, map_location=map_location, weights_only=False)
+    except TypeError:  # PyTorch versions before the weights_only argument
+        return torch.load(file, map_location=map_location)
 
 
 def intersect_dicts(da, db, exclude=()):
@@ -767,7 +795,7 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
 
 def strip_optimizer(f='best.pt', s=''):  # from utils.general import *; strip_optimizer()
     # Strip optimizer from 'f' to finalize training, optionally save as 's'
-    x = torch.load(f, map_location=torch.device('cpu'), weights_only=False)
+    x = torch_load(f, map_location=torch.device('cpu'))
     if x.get('ema'):
         x['model'] = x['ema']  # replace model with ema
     for k in 'optimizer', 'training_results', 'wandb_id', 'ema', 'updates':  # keys
