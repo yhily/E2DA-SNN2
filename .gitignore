@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Training and inference outputs
+runs/
+*.pt
+*.onnx
+*.engine
+
+# Local datasets
+COFFEE_FOB/
+Cherry/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

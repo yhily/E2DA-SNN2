@@ -13,6 +13,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import yaml
+from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import SGD, Adam, lr_scheduler
 from tqdm import tqdm
@@ -21,6 +22,7 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import val  # for end-of-epoch mAP
 from models.experimental import attempt_load
@@ -32,7 +34,7 @@ from utils.datasets import create_dataloader
 from utils.downloads import attempt_download
 from utils.general import (LOGGER, NCOLS, check_dataset, check_file, check_git_status, check_img_size,
                            check_requirements, check_suffix, check_yaml, colorstr, get_latest_run, increment_path,
-                           init_seeds, intersect_dicts, labels_to_class_weights, labels_to_image_weights, methods,
+                           init_seeds, intersect_dicts, labels_to_class_weights, labels_to_image_weights,
                            one_cycle, print_args, print_mutation, strip_optimizer)
 from utils.loss import ComputeLoss
 from utils.metrics import fitness
@@ -42,14 +44,6 @@ from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_devic
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
-
-
-class Loggers:
-    """最小日志器兼容层：W&B/Comet 等云端日志集成已从本仓库裁剪，
-    原 train.py 仍调用 Loggers() 并访问 loggers.wandb，这里保留接口并返回 None。"""
-
-    def __init__(self, save_dir=None, weights=None, opt=None, hyp=None, logger=None):
-        self.wandb = None
 
 
 def train(hyp,  # path/to/hyp.yaml or hyp dictionary
@@ -77,26 +71,12 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         yaml.safe_dump(hyp, f, sort_keys=False)
     with open(save_dir / 'opt.yaml', 'w') as f:
         yaml.safe_dump(vars(opt), f, sort_keys=False)
-    data_dict = None
-
-    # Loggers
-    if RANK in [-1, 0]:        #这里执行
-        loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
-        if loggers.wandb:
-            data_dict = loggers.wandb.data_dict#这里赋值了数据集的参数
-            if resume:#不执行
-                weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp
-
-        # Register actions
-        for k in methods(loggers):
-            callbacks.register_action(k, callback=getattr(loggers, k))
-
     # Config
     plots = not evolve  # create plots
     cuda = device.type != 'cpu'
     init_seeds(1 + RANK)
     with torch_distributed_zero_first(LOCAL_RANK):
-        data_dict = data_dict or check_dataset(data)  # check if None
+        data_dict = check_dataset(data)
     train_path, val_path = data_dict['train'], data_dict['val']
     nc = 1 if single_cls else int(data_dict['nc'])  # number of classes
     names = ['item'] if single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
@@ -106,10 +86,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     # Model
     check_suffix(weights, '.pt')  # check weights
     pretrained = weights.endswith('.pt')
-    if pretrained:#false不执行这里
+    if pretrained:
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location=device, weights_only=False)  # load checkpoint (checkpoints contain nn.Module)
+        ckpt = torch.load(weights, map_location=device)  # load checkpoint
         model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
         csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
@@ -119,7 +99,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
 
-    # Freeze空
+    # Freeze selected layers when requested.
     freeze = [f'model.{x}.' for x in range(freeze)]  # layers to freeze
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
@@ -222,15 +202,15 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                        prefix=colorstr('val: '))[0]
 
         if not resume:
-            labels = np.concatenate(dataset.labels, 0)#每一张图有很多歌label，相当于格式全部整合了成849942,5
+            labels = np.concatenate(dataset.labels, 0)
             # c = torch.tensor(labels[:, 0])  # classes
             # cf = torch.bincount(c.long(), minlength=nc) + 1.  # frequency
             # model._initialize_biases(cf.to(device))
-            if plots:#true
-                plot_labels(labels, names, save_dir)#平时训练可以关掉
+            if plots:
+                plot_labels(labels, names, save_dir)
 
             # Anchors
-            if not opt.noautoanchor:#执行；
+            if not opt.noautoanchor:
                 check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
             model.float()  # pre-reduce anchor precision
 
@@ -248,16 +228,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     hyp['label_smoothing'] = opt.label_smoothing
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
-    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights对每个类别进行加权。DVS就两类，不需要加权，考虑删除
+    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc
     model.names = names
-
-    # PyTorch 2.0+: 可选 torch.compile（仅在非 DDP 时启用；失败自动回退到普通模型）
-    if opt.compile and not (cuda and RANK != -1):
-        try:
-            model = torch.compile(model, mode=opt.compile)
-            LOGGER.info(f'Compiling model with torch.compile(mode={opt.compile})...')
-        except Exception as e:
-            LOGGER.warning(f'torch.compile() failed ({e}); continuing without compilation')
 
     # Start training
     t0 = time.time()
@@ -267,7 +239,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
-    scaler = torch.amp.GradScaler('cuda', enabled=cuda)
+    scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
     compute_loss = ComputeLoss(model)  # init loss class
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -288,6 +260,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
         mloss = torch.zeros(3, device=device)  # mean losses
+        print("-----------device:",device)
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
         pbar = enumerate(train_loader)
@@ -319,7 +292,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                     imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
             # Forward
-            with torch.autocast(device_type='cuda', enabled=cuda):
+            with amp.autocast(enabled=cuda):
                 pred = model(imgs)  # forward
                 # print(targets.to(device).shape)
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
@@ -445,15 +418,15 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default=ROOT / 'best.pt', help='initial weights path')
-    parser.add_argument('--cfg', type=str, default=ROOT / 'models/e2da.yaml', help='model.yaml path')
-    parser.add_argument('--data', type=str, default=ROOT / 'dataset.yaml', help='dataset.yaml path')
-    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyp.yaml', help='hyperparameters path')
+    parser.add_argument('--weights', type=str, default='', help='initial checkpoint; empty trains from scratch')
+    parser.add_argument('--cfg', type=str, default=ROOT / 'models/e2da.yaml', help='model configuration')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/data.yaml', help='dataset configuration')
+    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyp.yaml', help='hyperparameter configuration')
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch-size', type=int, default=2, help='total batch size for all GPUs, -1 for autobatch')
+    parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs, -1 for autobatch')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=ROOT / 'runs/train/exp2/weights/best.pt', default=False, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume the latest or specified run')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--noval', action='store_true', help='only validate final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable autoanchor check')
@@ -475,17 +448,8 @@ def parse_opt(known=False):
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='Label smoothing epsilon')
     parser.add_argument('--patience', type=int, default=100, help='EarlyStopping patience (epochs without improvement)')
     parser.add_argument('--freeze', type=int, default=0, help='Number of layers to freeze. backbone=10, all=24')
-    parser.add_argument('--compile', type=str, nargs='?', const='default', default=None,
-                        help='torch.compile mode: default, reduce-overhead, or max-autotune (PyTorch 2.0+)')
-
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-
-    # Weights & Biases arguments
-    parser.add_argument('--entity', default=None, help='W&B: Entity')
-    parser.add_argument('--upload_dataset', action='store_true', help='W&B: Upload dataset as artifact table')
-    parser.add_argument('--bbox_interval', type=int, default=-1, help='W&B: Set bounding-box image logging interval')
-    parser.add_argument('--artifact_alias', type=str, default='latest', help='W&B: Version of dataset artifact to use')
 
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
@@ -499,7 +463,7 @@ def main(opt, callbacks=Callbacks()):
         check_requirements(exclude=['thop'])
 
     # Resume
-    if opt.resume and not check_wandb_resume(opt) and not opt.evolve:  # resume an interrupted run
+    if opt.resume and not opt.evolve:  # resume an interrupted run
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         with open(Path(ckpt).parent.parent / 'opt.yaml', errors='ignore') as f:
@@ -529,8 +493,6 @@ def main(opt, callbacks=Callbacks()):
     # device = '0'
     # Train
     if not opt.evolve:
-        # print('-----执行！')
-
         train(opt.hyp, opt, device, callbacks)
         if WORLD_SIZE > 1 and RANK == 0:
             LOGGER.info('Destroying process group... ')
@@ -579,7 +541,7 @@ def main(opt, callbacks=Callbacks()):
         if opt.bucket:
             os.system(f'gsutil cp gs://{opt.bucket}/evolve.csv {save_dir}')  # download evolve.csv if exists
 
-        for _ in range(opt.evolve):  # generations to evolve，演变进化
+        for _ in range(opt.evolve):  # generations to evolve
             if evolve_csv.exists():  # if evolve.csv exists: select best hyps and mutate
                 # Select parent(s)
                 parent = 'single'  # parent selection method: 'single' or 'weighted'

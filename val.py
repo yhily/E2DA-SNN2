@@ -14,6 +14,7 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 # from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
@@ -66,7 +67,7 @@ def process_batch(detections, labels, iouv):
             matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
             # matches = matches[matches[:, 2].argsort()[::-1]]
             matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
-        matches = torch.as_tensor(matches, device=iouv.device)
+        matches = torch.Tensor(matches).to(iouv.device)
         correct[matches[:, 1].long()] = matches[:, 2:3] >= iouv
     return correct
 
@@ -120,7 +121,6 @@ def run(data,
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         half &= pt and device.type != 'cpu'  # half precision only supported by PyTorch on CUDA
         if pt:
-            print('----2执行')#执行这里
             model.model.half() if half else model.model.float()
         else:
             half = False
@@ -149,7 +149,7 @@ def run(data,
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
-    names = {k: v for k, v in enumerate(model.names if hasattr(model, 'names') else model.module.names)}#coco里面所有的名字
+    names = {k: v for k, v in enumerate(model.names if hasattr(model, 'names') else model.module.names)}
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
@@ -159,11 +159,11 @@ def run(data,
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         t1 = time_sync()
         if pt:
-            im = im.to(device, non_blocking=True)#这个时候的image恢复为原来的大小？？？范围在0-255之间。
+            im = im.to(device, non_blocking=True)
             targets = targets.to(device)
         # im = im.half() if half else im.float()  # uint8 to fp16/32
         im = im.float()
-        im /= 255  # 0 - 255 to 0.0 - 1.0   #这个变量什么意思
+        im /= 255  # uint8 [0, 255] to float [0, 1]
         nb, _, height, width = im.shape  # batch size, channels, height, width 384,672
         t2 = time_sync()
         dt[0] += t2 - t1
@@ -188,12 +188,12 @@ def run(data,
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
             tcls = labels[:, 0].tolist() if nl else []  # target class
-            path, shape = Path(paths[si]), shapes[si][0] #shape是原始image的尺寸
+            path, shape = Path(paths[si]), shapes[si][0]
             seen += 1
 
             if len(pred) == 0:
                 if nl:
-                    stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.empty(0), torch.empty(0), tcls))
+                    stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
                 continue
 
             # Predictions
@@ -297,13 +297,13 @@ def run(data,
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'dataset.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT/ 'best.pt', help='model.pt path(s)')#------------------------
+    parser.add_argument('--data', type=str, default=ROOT / 'data/data.yaml', help='dataset configuration')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'best.pt', help='checkpoint path(s)')
     parser.add_argument('--batch-size', type=int, default=16, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='NMS IoU threshold')
-    parser.add_argument('--task', default='test', help='train, val, test, speed or study')#---------------------------------
+    parser.add_argument('--task', default='test', help='train, val, test, speed or study')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')

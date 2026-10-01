@@ -1,132 +1,180 @@
+"""Core spiking layers used by E2DA-SNN.
+
+All layers in this module receive and return tensors arranged as
+``[time, batch, channels, height, width]``. Static RGB images are expanded
+along the leading time dimension by :class:`models.model.Model`.
+
+The lower-case aliases at the end of this file are intentionally retained so
+that existing YAML files and serialized checkpoints remain loadable.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# -----------------------------------------------------------------------------
-# SNN global hyper-parameters —— 单一来源 (single source of truth)
-# 旧的三个模块各自定义 time_window (snn_layers=2, modules=2, model=4) 且互不相同，
-# 会导致 Model.forward 平铺 4 个时间步而 SNN 层只消费前 2 个。此处统一为一份常量，
-# 各层实际时间步数改为从输入张量的第 0 维动态推导，彻底消除不一致。
-# -----------------------------------------------------------------------------
-THRESH = 0.5  # 神经元发放阈值 (neuronal threshold)
-LENS = 0.5  # 代理梯度宽度 (hyper-parameters of approximate function)
-DECAY = 0.25  # 膜电位衰减常数 (decay constants)
-TIME_WINDOW = 4  # 默认时间窗：Model.forward 将输入在时间维平铺的份数
 
-# 向后兼容别名（原有全局名，供外部代码引用）
-thresh = THRESH
-lens = LENS
-decay = DECAY
-time_window = TIME_WINDOW
+SPIKE_THRESHOLD = 0.5
+SURROGATE_WINDOW = 0.5
+MEMBRANE_DECAY = 0.25
+TIME_STEPS = 2
 
 
-# LIF 激活：阶跃函数 + 盒状代理梯度
-class ActFun(torch.autograd.Function):
+class SurrogateSpike(torch.autograd.Function):
+    """Binary spike function with a rectangular surrogate gradient."""
 
     @staticmethod
-    def forward(ctx, input):
-        ctx.save_for_backward(input)
-        return input.gt(THRESH).float()
+    def forward(ctx, membrane):
+        ctx.save_for_backward(membrane)
+        return membrane.gt(SPIKE_THRESHOLD).float()
 
     @staticmethod
     def backward(ctx, grad_output):
-        input, = ctx.saved_tensors
-        grad_input = grad_output.clone()
-        temp = abs(input - THRESH) < LENS
-        temp = temp / (2 * LENS)
-        return grad_input * temp.float()
+        (membrane,) = ctx.saved_tensors
+        within_window = (membrane - SPIKE_THRESHOLD).abs() < SURROGATE_WINDOW
+        surrogate = within_window.float() / (2 * SURROGATE_WINDOW)
+        return grad_output * surrogate
 
 
-act_fun = ActFun.apply
+surrogate_spike = SurrogateSpike.apply
 
 
-class mem_update(nn.Module):
-    """LIF 膜电位更新。输入/输出均为 (T, B, C, H, W)。
+class LIFActivation(nn.Module):
+    """Apply leaky integrate-and-fire dynamics across the time dimension.
 
-    时间步数 T 从输入第 0 维动态获取，不再依赖全局常量。
+    Args:
+        analog: If ``True``, use SiLU activations instead of binary spikes.
+            This compatibility option is preserved from the original code.
     """
 
-    def __init__(self, act=False):
-        super(mem_update, self).__init__()
-        self.actFun = nn.SiLU()
-        self.act = act
+    def __init__(self, analog=False, act=None):
+        super().__init__()
+        if act is not None:  # legacy keyword used by the original implementation
+            analog = act
+        self.actFun = nn.SiLU()  # legacy attribute retained for serialized checkpoints
+        self.act = analog
 
-    def forward(self, x):
-        T = x.shape[0]
-        mem = torch.zeros_like(x[0])
-        spike = torch.zeros_like(x[0])
-        output = torch.zeros_like(x)
-        mem_old = 0
-        for i in range(T):
-            if i >= 1:
-                mem = mem_old * DECAY * (1 - spike.detach()) + x[i]
+    def forward(self, inputs):
+        """Return activations with the same ``[T, B, C, H, W]`` shape."""
+        membrane = torch.zeros_like(inputs[0])
+        spike = torch.zeros_like(inputs[0])
+        outputs = torch.zeros_like(inputs)
+
+        for step in range(inputs.shape[0]):
+            if step == 0:
+                membrane = inputs[step]
             else:
-                mem = x[i]
-            if self.act:
-                spike = self.actFun(mem)
-            else:
-                spike = act_fun(mem)
+                membrane = membrane * MEMBRANE_DECAY * (1 - spike.detach()) + inputs[step]
 
-            mem_old = mem.clone()
-            output[i] = spike
-        return output
+            spike = self.actFun(membrane) if self.act else surrogate_spike(membrane)
+            outputs[step] = spike
+
+        return outputs
 
 
-class Snn_Conv2d(nn.Conv2d):
-    """时间维卷积：输入 (T, B, C, H, W) -> 输出 (T, B, C_out, H_out, W_out)。
+class SpikingConv2d(nn.Conv2d):
+    """Apply one shared 2-D convolution independently at every time step."""
 
-    将 (T, B) 合并为一批做单次 conv2d，再还原形状，等价于逐时间步卷积但快得多。
-    """
-
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
-                 padding=0, dilation=1, groups=1,
-                 bias=True, padding_mode='zeros', marker='b'):
-        super(Snn_Conv2d, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        bias=True,
+        padding_mode="zeros",
+        marker="b",
+    ):
+        super().__init__(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias,
+            padding_mode,
+        )
         self.marker = marker
 
-    def forward(self, input):
-        T, B = input.shape[0], input.shape[1]
-        x = input.reshape(T * B, *input.shape[2:])
-        y = F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
-        return y.view(T, B, *y.shape[1:])
+    def forward(self, inputs):
+        """Convolve a ``[T, B, C, H, W]`` spike tensor."""
+        return torch.stack(
+            [
+                F.conv2d(
+                    inputs[step],
+                    self.weight,
+                    self.bias,
+                    self.stride,
+                    self.padding,
+                    self.dilation,
+                    self.groups,
+                )
+                for step in range(inputs.shape[0])
+            ],
+            dim=0,
+        )
 
 
-class batch_norm_2d(nn.Module):
-    """Spiking 时空 BatchNorm：把 (T, B, C, H, W) 视作 (N, C, D, H, W)，在 (N, D, H, W) 上归一化。"""
+class ThresholdBatchNorm3d(nn.BatchNorm3d):
+    """Temporal batch normalization initialized at the firing threshold."""
 
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
-        super(batch_norm_2d, self).__init__()
-        self.bn = BatchNorm3d1(num_features)  # input (N,C,D,H,W) spatio-temporal Batch Normalization
-
-    def forward(self, input):
-        y = input.transpose(0, 2).contiguous().transpose(0, 1).contiguous()
-        y = self.bn(y)
-        return y.contiguous().transpose(0, 1).contiguous().transpose(0, 2)
-
-
-class batch_norm_2d1(nn.Module):
-
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
-        super(batch_norm_2d1, self).__init__()
-        self.bn = BatchNorm3d2(num_features)
-
-    def forward(self, input):
-        y = input.transpose(0, 2).contiguous().transpose(0, 1).contiguous()
-        y = self.bn(y)
-        return y.contiguous().transpose(0, 1).contiguous().transpose(0, 2)
-
-
-class BatchNorm3d1(torch.nn.BatchNorm3d):  # 5
     def reset_parameters(self):
         self.reset_running_stats()
         if self.affine:
-            nn.init.constant_(self.weight, THRESH)
+            nn.init.constant_(self.weight, SPIKE_THRESHOLD)
             nn.init.zeros_(self.bias)
 
 
-class BatchNorm3d2(torch.nn.BatchNorm3d):
+class ResidualBatchNorm3d(nn.BatchNorm3d):
+    """Lower-gain temporal batch normalization used at residual outputs."""
+
     def reset_parameters(self):
         self.reset_running_stats()
         if self.affine:
-            nn.init.constant_(self.weight, 0.2 * THRESH)
+            nn.init.constant_(self.weight, 0.2 * SPIKE_THRESHOLD)
             nn.init.zeros_(self.bias)
+
+
+class TemporalBatchNorm(nn.Module):
+    """Batch-normalize spike tensors while preserving ``[T, B, C, H, W]``."""
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super().__init__()
+        self.bn = ThresholdBatchNorm3d(num_features, eps=eps, momentum=momentum)
+
+    def forward(self, inputs):
+        batch_first = inputs.permute(1, 2, 0, 3, 4).contiguous()
+        normalized = self.bn(batch_first)
+        return normalized.permute(2, 0, 1, 3, 4).contiguous()
+
+
+class ResidualTemporalBatchNorm(nn.Module):
+    """Temporal batch normalization with lower residual-branch gain."""
+
+    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+        super().__init__()
+        self.bn = ResidualBatchNorm3d(num_features, eps=eps, momentum=momentum)
+
+    def forward(self, inputs):
+        batch_first = inputs.permute(1, 2, 0, 3, 4).contiguous()
+        normalized = self.bn(batch_first)
+        return normalized.permute(2, 0, 1, 3, 4).contiguous()
+
+
+# Backward-compatible names used by existing model YAML files and checkpoints.
+thresh = SPIKE_THRESHOLD
+lens = SURROGATE_WINDOW
+decay = MEMBRANE_DECAY
+time_window = TIME_STEPS
+ActFun = SurrogateSpike
+act_fun = surrogate_spike
+mem_update = LIFActivation
+Snn_Conv2d = SpikingConv2d
+BatchNorm3d1 = ThresholdBatchNorm3d
+BatchNorm3d2 = ResidualBatchNorm3d
+batch_norm_2d = TemporalBatchNorm
+batch_norm_2d1 = ResidualTemporalBatchNorm

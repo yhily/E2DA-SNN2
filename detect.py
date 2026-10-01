@@ -11,11 +11,8 @@ FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-# from visualizer.visualizer.visualizer import get_local
-# get_local.activate()
-
-import numpy as np
 from models.modules import DetectMultiBackend
 from utils.datasets import IMG_FORMATS, VID_FORMATS, LoadImages, LoadStreams
 from utils.general import (LOGGER, check_file, check_img_size, check_imshow, check_requirements, colorstr,
@@ -23,24 +20,8 @@ from utils.general import (LOGGER, check_file, check_img_size, check_imshow, che
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, time_sync
 
-from PIL import Image,ImageDraw
-import matplotlib.pyplot as plt
-
-def visualize_grid_to_grid(args,index, attention_name, att_map, image, alpha=0.6):
-    mask = Image.fromarray(att_map).resize((image.shape[1],image.shape[0]))
-    fig, ax = plt.subplots(1, 2)
-    fig.tight_layout()
-    
-    ax[0].imshow(image)
-    ax[0].axis('off')
-    
-    ax[1].imshow(image)
-    ax[1].imshow(mask/np.max(mask), alpha=alpha, cmap='rainbow')
-    ax[1].axis('off')
-    plt.savefig(os.path.join(args,'attention_visualize_%s_%d.png'%(attention_name,index)))
-
 @torch.no_grad()
-def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
+def run(weights=ROOT / 'best.pt',  # model.pt path(s)
         source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
         conf_thres=0.25,  # confidence threshold
@@ -111,11 +92,7 @@ def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
     dt, seen = [0.0, 0.0, 0.0], 0
     for path, im, im0s, vid_cap, s in dataset:
         t1 = time_sync()
-        im = torch.from_numpy(im).to(device)#shape:[3,480,640]
-
-        # cache = get_local.cache
-        image = im.squeeze().permute(1,2,0).cpu().detach().numpy()
-        
+        im = torch.from_numpy(im).to(device)
         im = im.half() if half else im.float()  # uint8 to fp16/32
         im /= 255  # 0 - 255 to 0.0 - 1.0
         if len(im.shape) == 3:
@@ -130,51 +107,8 @@ def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
         dt[1] += t3 - t2
 
         # NMS
-        # print("pred:",pred)
         pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
         dt[2] += time_sync() - t3
-
-        # Second-stage classifier (optional)
-        # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
-
-        #attention visualise
-        # print("cache:",cache)
-        # # get_local.clear()
-        # attention_name = "mem_update.forward"
-        # fr=np.zeros(len(cache[attention_name]))
-        # sz=np.zeros(len(cache[attention_name]))
-        # for att_index in range(len(cache[attention_name])):
-        #     #att_map = cache[attention_name][att_index][:,0,:,:,:]
-        #     #att_map = np.mean(att_map,axis=0)
-        #     #att_map = np.mean(att_map,axis=0)
-        #     # visualize_grid_to_grid(save_dir,att_index,attention_name,att_map,image)
-        #     fr[att_index]=cache[attention_name][att_index].sum()/cache[attention_name][att_index].size
-        # for att_index in range(len(cache[attention_name])):
-        #     #att_map = cache[attention_name][att_index][:,0,:,:,:]
-        #     #att_map = np.mean(att_map,axis=0)
-        #     #att_map = np.mean(att_map,axis=0)
-        #     # visualize_grid_to_grid(save_dir,att_index,attention_name,att_map,image)
-        #     sz[att_index]=cache[attention_name][att_index].size
-        # #计算firing rate
-
-        # FR.append(fr)
-        # SZ.append(sz)
-        # attention_name = "ChannelAttention.forward"
-        # for att_index in range(len(cache[attention_name])):
-        #     att_map = cache[attention_name][att_index][0,0,:,:,:]
-        #     att_map = np.mean(att_map,axis=0)
-        #     # visualize_grid_to_grid(save_dir,att_index,attention_name,att_map,image)
-        # attention_name = "SpatialAttention.forward"
-        # for att_index in range(len(cache[attention_name])):
-        #     att_map = cache[attention_name][att_index][0,0,0,:,:]
-        #     # visualize_grid_to_grid(save_dir,att_index,attention_name,att_map,image)
-        # attention_name = "CSA.forward"
-        # for att_index in range(len(cache[attention_name])):
-        #     att_map = cache[attention_name][att_index][0,0,0,:,:]
-        #     # visualize_grid_to_grid(save_dir,att_index,attention_name,att_map,image)
-        
-        # get_local.clear()
-
 
         # Process predictions
         for i, det in enumerate(pred):  # per image
@@ -226,6 +160,7 @@ def run(weights=ROOT / 'yolov3.pt',  # model.pt path(s)
                 cv2.waitKey(1)  # 1 millisecond
 
             # Save results (image with detections)
+            save_img=True
             if save_img:
                 if dataset.mode == 'image':
                     cv2.imwrite(save_path, im0)

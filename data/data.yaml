@@ -1,8 +1,10 @@
-path: COFFEE_FOB  # dataset root dir
-train: train  # train images 1655 images
-val:  val  # val images 473 images
-test: test  # test images 273 images
+# Replace this with the local dataset root. Relative paths are resolved from
+# the current working directory.
+path: COFFEE_FOB
+train: train
+val: val
+test: test
 
-# Classes
-nc: 4  # number of classes
+# Class identifiers in YOLO labels must follow this order.
+nc: 4
 names: ['overripe', 'ripe', 'semi_ripe', 'unripe']

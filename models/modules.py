@@ -17,18 +17,17 @@ import requests
 import torch
 import torch.nn as nn
 from PIL import Image
-from utils.plots import Annotator, colors, save_one_box
-
-
+from torch.cuda import amp
 import torch.nn.functional as F
-
+from utils.augmentations import letterbox
 from utils.datasets import exif_transpose
-from utils.augmentations import  letterbox
 from utils.general import (LOGGER, check_requirements, check_suffix, colorstr, increment_path, make_divisible,
                            non_max_suppression, scale_coords, xywh2xyxy, xyxy2xywh)
+from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import copy_attr
 
-from models.snn_layers import *  # THRESH/LENS/DECAY/TIME_WINDOW 及 SNN 层（checkpoint 类路径不变）
+from models.snn_layers import Snn_Conv2d, batch_norm_2d, batch_norm_2d1, mem_update
+
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     """Automatically calculates same shape padding for convolutional layers, optionally adjusts for dilation."""
@@ -65,7 +64,7 @@ class Conv(nn.Module):
 
 
 class Conv_A(nn.Module):
-    # Standard convolution
+    """Spiking convolution followed by temporal batch normalization and SiLU."""
     def __init__(self, c1, c2, k, s, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
@@ -79,12 +78,11 @@ class Conv_A(nn.Module):
         return self.act(self.conv(x))
 
 class Conv_1(nn.Module):
-    # Standard convolution
+    """Input spiking convolution without an explicit LIF activation."""
     def __init__(self, c1, c2, k, s, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = batch_norm_2d(c2)
-        #self.act = mem_update() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
         return self.bn(self.conv(x))
@@ -93,12 +91,11 @@ class Conv_1(nn.Module):
         return self.conv(x)
     
 class Conv_2(nn.Module):
-    # Standard convolution
+    """Output spiking convolution without an explicit LIF activation."""
     def __init__(self, c1, c2, k, s, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = batch_norm_2d(c2)
-        #self.act = mem_update() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
         return self.bn(self.conv(x))
@@ -107,69 +104,48 @@ class Conv_2(nn.Module):
         return self.conv(x)
 
 
-class Snn_Conv2d_BN(nn.Module):
-    """SNN 卷积 + 时空 BatchNorm（无激活）。
-
-    e2da.yaml / e2da_lite.yaml 的 head 中引用了该模块，但原仓库从未定义，
-    导致模型构建时 eval('Snn_Conv2d_BN') 抛 NameError。此处补齐定义。
-    """
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
-        super().__init__()
-        self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
-        self.bn = batch_norm_2d(c2)
-
-    def forward(self, x):
-        return self.bn(self.conv(x))
-
-    def forward_fuse(self, x):
-        return self.conv(x)
+class Snn_Conv2d_BN(Conv_2):
+    """Named spiking convolution + temporal BN layer used by model YAML files."""
 
 
 class Pools(nn.Module):
+    """Apply max pooling independently to each temporal slice."""
+
     def __init__(self, kernel_size, stride, padding=0, dilation=1):
         super().__init__()
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
-        self.pool = nn.MaxPool2d(kernel_size=self.kernel_size, stride=self.stride, padding=self.padding)
+        self.pool = nn.MaxPool2d(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation)
 
-    def forward(self, input):
-        # 输入 (T, B, C, H, W)：合并时间维为一批做一次池化，再还原形状
-        T, B = input.shape[0], input.shape[1]
-        x = input.reshape(T * B, *input.shape[2:])
-        y = self.pool(x)
-        return y.view(T, B, *y.shape[1:])
+    def forward(self, inputs):
+        return torch.stack([self.pool(frame) for frame in inputs], dim=0)
 
-class zeropad(nn.Module):
+
+class TemporalZeroPad2d(nn.Module):
+    """Apply zero padding independently to each temporal slice."""
+
     def __init__(self, padding):
         super().__init__()
-        self.padding = padding
-        self.pad = nn.ZeroPad2d(padding=self.padding)
+        self.pad = nn.ZeroPad2d(padding=padding)
 
-    def forward(self, input):
-        T, B = input.shape[0], input.shape[1]
-        x = input.reshape(T * B, *input.shape[2:])
-        y = self.pad(x)
-        return y.view(T, B, *y.shape[1:])
+    def forward(self, inputs):
+        return torch.stack([self.pad(frame) for frame in inputs], dim=0)
+
+
+zeropad = TemporalZeroPad2d  # backward-compatible configuration name
 
 
 class Sample(nn.Module):
-    def __init__(self, size=None, scale_factor=None, mode='nearest'):
-        super(Sample, self).__init__()
-        self.scale_factor = scale_factor
-        self.mode = mode
-        self.size = size
+    """Upsample every frame of a temporal spike tensor."""
 
-    def forward(self, input):
-        T, B = input.shape[0], input.shape[1]
-        if self.scale_factor is not None:
-            size = (int(input.shape[3] * self.scale_factor), int(input.shape[4] * self.scale_factor))
-        else:
-            size = self.size
-        x = input.reshape(T * B, *input.shape[2:])
-        y = F.interpolate(x, size=size, mode=self.mode)
-        return y.view(T, B, *y.shape[1:])
+    def __init__(self, size=None, scale_factor=None, mode="nearest"):
+        super().__init__()
+        self.up = nn.Upsample(size=size, scale_factor=scale_factor, mode=mode)
+
+    def forward(self, inputs):
+        return torch.stack([self.up(frame) for frame in inputs], dim=0)
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels,kernel=3, stride=1,e=0.5):
@@ -221,13 +197,11 @@ class BasicBlock_1(nn.Module):#
 
 
 class BasicBlock_2(nn.Module):
+    """Standard two-layer residual spiking block."""
+
     def __init__(self, in_channels, out_channels,k_size=3,stride=1):
         super().__init__()
-        p=None
-        if k_size==3:
-            pad=1
-        if k_size==1:
-            pad=0
+        pad = k_size // 2
         self.residual_function = nn.Sequential(
             mem_update(act=False),
             Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False),
@@ -251,13 +225,15 @@ class BasicBlock_2(nn.Module):
         return (self.residual_function(x) + self.shortcut(x))
 
 class BasicBlock_3(nn.Module):
+    """Dual-channel Attention Enhanced Block (DAEB).
+
+    Downsampling shortcuts combine parameter-free SimAM reweighting with
+    LIF-encoded average and max pooling before residual fusion.
+    """
+
     def __init__(self, in_channels, out_channels,k_size=3,stride=1):
         super().__init__()
-        p=None
-        if k_size==3:
-            pad=1
-        if k_size==1:
-            pad=0
+        pad = k_size // 2
         self.residual_function = nn.Sequential(
             mem_update(act=False),
             Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False),
@@ -273,11 +249,8 @@ class BasicBlock_3(nn.Module):
             self.attention = simam_module()
             self.max_pool = nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride))
             self.avg_pool = nn.AvgPool3d((1, stride, stride), stride=(1, stride, stride))
-            self.LIF = mem_update(act=False)
+            self.LIF = mem_update(act=False)  # attribute name retained for checkpoint compatibility
             self.shortcut = nn.Sequential(
-                # nn.AvgPool3d((1, stride, stride), stride=(1, stride, stride)),
-                # nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
-                # mem_update(act=False),
                 Snn_Conv2d(in_channels*2, out_channels, kernel_size=1, stride=1, bias=False),
                 batch_norm_2d(out_channels),
             )
@@ -285,21 +258,22 @@ class BasicBlock_3(nn.Module):
     def forward(self, x):
 
         if isinstance(self.shortcut, nn.Identity):
-            shortcut = x  # 直接跳连
+            shortcut = x
         else:
             x = self.attention(x)
-            AvgPool = self.avg_pool(x)
-            MaxPool = self.max_pool(x)
-            shortcut = torch.cat([self.LIF(AvgPool), self.LIF(MaxPool)], dim=2)  # 在通道维度拼接
-            # shortcut = (AvgPool + MaxPool)/2
+            average_features = self.LIF(self.avg_pool(x))
+            maximum_features = self.LIF(self.max_pool(x))
+            shortcut = torch.cat([average_features, maximum_features], dim=2)
             shortcut = self.shortcut(shortcut)
-        return (self.residual_function(x) + shortcut)
+        return self.residual_function(x) + shortcut
 
 class simam_module(torch.nn.Module):
+    """Parameter-free SimAM attention for temporal feature tensors."""
+
     def __init__(self, channels = None, e_lambda = 1e-4):
         super(simam_module, self).__init__()
 
-        self.activaton = nn.Sigmoid()
+        self.activaton = nn.Sigmoid()  # original attribute name retained for checkpoint compatibility
         self.e_lambda = e_lambda
 
     def __repr__(self):
@@ -313,53 +287,54 @@ class simam_module(torch.nn.Module):
 
     def forward(self, x):
 
-        t,b, c, h, w = x.shape
-        x = x.flatten(0,1)
-        
-        n = w * h - 1
-
-        x_minus_mu_square = (x - x.mean(dim=[2,3], keepdim=True)).pow(2)
-        y = x_minus_mu_square / (4 * (x_minus_mu_square.sum(dim=[2,3], keepdim=True) / n + self.e_lambda)) + 0.5
-        output = x * self.activaton(y)
-        return output.reshape(t,b, c, h, w)
+        time_steps, batch_size, channels, height, width = x.shape
+        flattened = x.flatten(0, 1)
+        spatial_degrees = max(width * height - 1, 1)
+        squared_deviation = (flattened - flattened.mean(dim=(2, 3), keepdim=True)).pow(2)
+        energy = squared_deviation / (
+            4 * (squared_deviation.sum(dim=(2, 3), keepdim=True) / spatial_degrees + self.e_lambda)
+        ) + 0.5
+        output = flattened * self.activaton(energy)
+        return output.reshape(time_steps, batch_size, channels, height, width)
 
 class Fusion(nn.Module):
-    def __init__(self,  out_channels,  kerenel_size,ratio = 8):
+    """Cross-Level Feature Interaction Module (CFIM).
+
+    The module accepts the list of aligned shallow and deep tensors produced by
+    the configuration parser. Each tensor follows ``[T, B, C, H, W]``.
+    """
+
+    def __init__(self, out_channels, kernel_size, ratio=8):
         super().__init__()
-
-        # self.adjust_conv = nn.Identity()
-        # if inc[0] != inc[1]:
-        #     self.adjust_conv = Conv(inc[0], inc[1], k=1)
-
-        self.sharedMLP = nn.Sequential(
-                nn.Conv2d(out_channels, out_channels // ratio, kerenel_size, padding='same', bias=False),
+        self.sharedMLP = nn.Sequential(  # original attribute name retained for checkpoint compatibility
+                nn.Conv2d(out_channels, out_channels // ratio, kernel_size, padding='same', bias=False),
                 nn.ReLU(),
-                nn.Conv2d(out_channels // ratio, out_channels, kerenel_size, padding='same', bias=False),)
+                nn.Conv2d(out_channels // ratio, out_channels, kernel_size, padding='same', bias=False),)
         self.sigmoid = nn.Sigmoid()
-        # self.scattering = Scattering2D(J=2, shape=(32,32)) 
 
-    def forward(self, x):
-        # 与 Concat/Detect 一致：多路输入以列表传入，x = [x0, x1]
-        x0, x1 = x
-        b, t, _, _, _ = x0.shape
-        x0 = x0.flatten(0, 1)
-        x1 = x1.flatten(0, 1)
-        # x0 = self.adjust_conv(x0)
-                # ===> 🔥 Scattering Transform
-        # x0_scat = self.scattering(x0)
-        # x1_scat = self.scattering(x1)
-        x_concat = torch.cat([x0, x1], dim=1)  # n c h w
-        x_concat = self.sharedMLP(x_concat)
-        x_concat = self.sigmoid(x_concat)
-        x0_weight, x1_weight = torch.split(x_concat, [x0.size()[1], x1.size()[1]], dim=1)
-        x0_weight = x0 * x0_weight
-        x1_weight = x1 * x1_weight
-        x0_out = x0_weight + x1
-        x1_out = x1_weight + x0
-        out1 = torch.cat([x0_out, x1_out], dim=1)
-        c_out, h_out, w_out = out1.shape[1:] 
-        out = out1.reshape(b, t, c_out, h_out, w_out)
-        return out
+    def forward(self, features, deep_features=None):
+        if deep_features is None:
+            if not isinstance(features, (list, tuple)) or len(features) != 2:
+                raise ValueError("CFIM expects [shallow_features, deep_features].")
+            shallow_features, deep_features = features
+        else:
+            shallow_features = features
+
+        if shallow_features.shape[:2] != deep_features.shape[:2]:
+            raise ValueError("CFIM inputs must share time and batch dimensions.")
+        if shallow_features.shape[-2:] != deep_features.shape[-2:]:
+            raise ValueError("CFIM inputs must have aligned spatial dimensions.")
+
+        time_steps, batch_size = shallow_features.shape[:2]
+        shallow = shallow_features.flatten(0, 1)
+        deep = deep_features.flatten(0, 1)
+
+        gates = self.sigmoid(self.sharedMLP(torch.cat([shallow, deep], dim=1)))
+        shallow_gate, deep_gate = torch.split(gates, [shallow.shape[1], deep.shape[1]], dim=1)
+        shallow_output = shallow * shallow_gate + deep
+        deep_output = deep * deep_gate + shallow
+        fused = torch.cat([shallow_output, deep_output], dim=1)
+        return fused.reshape(time_steps, batch_size, *fused.shape[1:])
           
 class Contract(nn.Module):
     # Contract width-height into channels, i.e. x(1,64,80,80) to x(1,256,40,40)
@@ -667,7 +642,7 @@ class DetectMultiBackend(nn.Module):
             y = self.model.predict({"image": im})  # coordinates are xywh normalized
             if "confidence" in y:
                 box = xywh2xyxy(y["coordinates"] * [[w, h, w, h]])  # xyxy pixels
-                conf, cls = y["confidence"].max(1), y["confidence"].argmax(1).astype(np.float64)
+                conf, cls = y["confidence"].max(1), y["confidence"].argmax(1).astype(np.float)
                 y = np.concatenate((box, conf.reshape(-1, 1), cls.reshape(-1, 1)), 1)
             else:
                 y = list(reversed(y.values()))  # reversed for segmentation models (pred, proto)
@@ -729,11 +704,10 @@ class DetectMultiBackend(nn.Module):
         See `export_formats` for all.
         """
         # types = [pt, jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle]
-        # 原实现依赖仓库中不存在的 export.py，改为内联后缀表
+        from export import export_formats
         from utils.downloads import is_url
 
-        sf = ['.pt', '.torchscript', '.onnx', '.xml', '.engine', '.mlmodel',
-              '_saved_model', '.pb', '.tflite', '_edgetpu.tflite', '.tfjs', '_paddle_model']  # export suffixes
+        sf = list(export_formats().Suffix)  # export suffixes
         if not is_url(p, check=False):
             check_suffix(p, sf)  # checks
         url = urlparse(p)  # if url may be Triton inference server
@@ -809,7 +783,7 @@ class AutoShape(nn.Module):
             p = next(self.model.parameters()) if self.pt else torch.empty(1, device=self.model.device)  # param
             autocast = self.amp and (p.device.type != "cpu")  # Automatic Mixed Precision (AMP) inference
             if isinstance(ims, torch.Tensor):  # torch
-                with torch.amp.autocast('cuda', enabled=autocast):
+                with amp.autocast(autocast):
                     return self.model(ims.to(p.device).type_as(p), augment=augment)  # inference
 
             # Pre-process
@@ -836,7 +810,7 @@ class AutoShape(nn.Module):
             x = np.ascontiguousarray(np.array(x).transpose((0, 3, 1, 2)))  # stack and BHWC to BCHW
             x = torch.from_numpy(x).to(p.device).type_as(p) / 255  # uint8 to fp16/32
 
-        with torch.amp.autocast('cuda', enabled=autocast):
+        with amp.autocast(autocast):
             # Inference
             with dt[1]:
                 y = self.model(x, augment=augment)  # forward

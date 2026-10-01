@@ -1,80 +1,165 @@
-<div align="center">
+# E2DA-SNN
 
-## Event-Driven Dual-Attention Spiking Neural Network for Energy-Efficient Detection of Coffee Fruit Maturity
-</div>
+**Energy-Efficient Dual-Attention Spiking Detection via Cross-Level Feature Interaction**
 
-This repository provides the official implementation of **E2DA-SNN**, an event-driven spiking neural network for energy-efficient object detection.  
+This repository contains the official PyTorch implementation of E2DA-SNN, a
+directly trained spiking object detector designed for dense, small, and
+partially occluded targets. Coffee and cherry maturity datasets are used as
+validation testbeds; they do not define the scope of the method.
 
-The code is released to support reproducibility of the experimental results reported in the paper.
+## Method overview
 
----
+E2DA-SNN preserves weak spatial evidence under a short simulation horizon with
+three complementary components:
 
-### Requirements
+- **DAEB — Dual-channel Attention Enhanced Block:** combines parameter-free
+  SimAM reweighting with LIF-encoded average and max pooling.
+- **CFIM — Cross-Level Feature Interaction Module:** learns content-dependent
+  gates between aligned shallow and deep features.
+- **P3 detection branch:** retains a high-resolution prediction surface for
+  small and crowded objects, alongside the P4 and P5 branches.
 
-The code has been tested with the following environment:
+The implementation uses the tensor convention `[time, batch, channels,
+height, width]` inside the spiking network. Static RGB images are replicated
+over `T=2` simulation steps before feature extraction.
 
-- Python: >= 3.8 (推荐 3.10+)
-- PyTorch: >= 2.0（已适配 2.0+，验证环境：PyTorch 2.9 / Python 3.13）
-- CUDA: 11.7+（2.x 对应版本）
+| Paper component | Implementation |
+| --- | --- |
+| LIF dynamics and surrogate gradient | `models/snn_layers.py` |
+| DAEB | `BasicBlock_3` in `models/modules.py` |
+| CFIM | `Fusion` in `models/modules.py` |
+| P3–P5 temporal detection head | `Detect` in `models/model.py` |
+| Full and lightweight architectures | `models/e2da.yaml`, `models/e2da_lite.yaml` |
 
-<details open>
-<summary>Install</summary>
+## Repository layout
+
+```text
+E2DA-SNN/
+├── data/                  # dataset and hyperparameter YAML files
+├── models/                # E2DA-SNN architecture and spiking layers
+├── utils/                 # data loading, losses, metrics, and plotting
+├── train.py               # training entry point
+├── val.py                 # validation and test entry point
+├── detect.py              # image/video inference entry point
+└── requirements.txt
+```
+
+## Environment
+
+The experiments reported in the paper used:
+
+- Python 3.8
+- PyTorch 1.10.0
+- CUDA 11.3
+- cuDNN 8.2.0
+
+Install a PyTorch build that matches your CUDA environment first, then install
+the remaining dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-</details>
+Newer PyTorch versions may work, but they have not been used to reproduce the
+reported results.
 
-### SNN 时间窗（Time Window）
+## Datasets
 
-所有 SNN 层（`mem_update`、`Snn_Conv2d`、`Pools`、`Sample` 等）的时间步数现在统一从
-输入张量第 0 维动态推导，唯一的时间窗常量为 `models/snn_layers.py` 中的 `TIME_WINDOW`（默认 4），
-可通过模型 yaml 的 `time_window` 字段覆盖（如 `time_window: 2`）。
-原代码中 `snn_layers.py`(2)、`modules.py`(2)、`model.py`(4) 各有一份互不相同的 `time_window`，
-会导致模型只消费前 2 个时间步，本仓库已统一修复。
+Two public datasets are used for evaluation:
 
-</details>
+- [COFFEE_FOB](https://universe.roboflow.com/nata-zlj1h/coffee_fob-gekr0/dataset)
+  — the primary benchmark for ablation and comparison.
+- [Cherry](https://universe.roboflow.com/project-k2yri/cherry-tnrjs/dataset)
+  — a secondary transfer benchmark.
 
-### Datasets
+Download a dataset in YOLO format and update `path`, `train`, `val`, `test`,
+`nc`, and `names` in `data/data.yaml`. A typical layout is:
 
-This project uses two public datasets for fruit maturity detection:
-
-- **COFFEE_FOB**: Primary benchmark dataset, containing 2365 images captured under real-world orchard conditions, including dense fruit distributions, non-uniform illumination, and partial occlusions. [Download link](https://universe.roboflow.com/nata-zlj1h/coffee_fob-gekr0/dataset)
-
-- **Cherry**: Secondary dataset, containing 2700 images with similar characteristics. [Download link](https://universe.roboflow.com/project-k2yri/cherry-tnrjs/dataset)
-
-A small subset of sample images and labels are included in this repository (`dataset/images_samples` and `dataset/labels_samples`) to illustrate the data format. Please download the full datasets from the links above for training and evaluation.
-
-### Pretrained Checkpoints
-
-We provide pretrained [E2DA](https://drive.google.com/file/d/1VsOd_sk0Wf6R8SFKw9sLLP9xopR7hcHw/view?usp=sharing) and [E2DA-Lite](https://drive.google.com/file/d/1Kmgp-MgIiW2n2igNH68Xw-21OB3YuJxx/view?usp=sharing) models on the COFFEE_FOB dataset.
-
-### Training 
-<details open>
-<summary>Train</summary>
-
-Train the standard E2DA model:
-```bash
-python train.py --cfg models/e2da.yaml --data data.yaml --weights path/to/weights.pt
-```
-Train the lightweight E2DA-Lite model:
-```bash
-python train.py --cfg models/e2da_lite.yaml --data data.yaml --weights path/to/weights.pt
-```
-可选（PyTorch 2.0+）：使用 `torch.compile` 加速训练（单卡/CPU，失败自动回退）：
-```bash
-python train.py --cfg models/e2da.yaml --data data.yaml --compile default
+```text
+dataset_root/
+├── train/images/          # training images
+├── train/labels/          # YOLO labels
+├── val/images/
+├── val/labels/
+├── test/images/
+└── test/labels/
 ```
 
-</details>
+Use forward slashes in YAML paths, including on Windows. The class order in
+`names` must match the integer class identifiers stored in the label files.
 
-### Evaluation
-<details open> <summary>Validate / Evaluate Models</summary>
+## Pretrained checkpoints
 
-Evaluate a trained model:
+- [E2DA-SNN](https://drive.google.com/file/d/1VsOd_sk0Wf6R8SFKw9sLLP9xopR7hcHw/view?usp=sharing)
+- [E2DA-SNN-Lite](https://drive.google.com/file/d/1Kmgp-MgIiW2n2igNH68Xw-21OB3YuJxx/view?usp=sharing)
+
+Download a checkpoint and place it in a local directory such as `weights/`.
+
+## Training
+
+Train the full model from scratch:
+
 ```bash
-python val.py --weights path/to/weights.pt --data data.yaml
+python train.py \
+  --cfg models/e2da.yaml \
+  --data data/data.yaml \
+  --hyp data/hyp.yaml \
+  --weights '' \
+  --epochs 100 \
+  --batch-size 4 \
+  --imgsz 640 \
+  --device 0
 ```
 
-</details>
+Train the lightweight model by replacing the configuration:
+
+```bash
+python train.py --cfg models/e2da_lite.yaml --data data/data.yaml --weights ''
+```
+
+To fine-tune a checkpoint, pass its path to `--weights`. Training outputs are
+written to `runs/train/` by default.
+
+## Evaluation
+
+```bash
+python val.py \
+  --weights weights/e2da.pt \
+  --data data/data.yaml \
+  --task test \
+  --imgsz 640 \
+  --device 0
+```
+
+The evaluator reports precision, recall, mAP@0.5, and mAP@0.5:0.95.
+
+## Inference
+
+```bash
+python detect.py \
+  --weights weights/e2da.pt \
+  --source path/to/images_or_video \
+  --imgsz 640 \
+  --conf-thres 0.25 \
+  --device 0
+```
+
+Predictions are saved under `runs/detect/` unless another output directory is
+specified.
+
+## Reproducibility notes
+
+- The public datasets contain static images; they are replicated across time
+  and are not event-camera recordings.
+- The paper's energy values are operation-level estimates under a shared
+  reference process. They are not wall-plug or neuromorphic-chip measurements.
+- Dataset splits, image size, hyperparameters, model YAML, and checkpoint must
+  be kept fixed when comparing ablations.
+- Random seeds improve repeatability but do not guarantee bitwise-identical
+  CUDA results across hardware or software versions.
+
+## Acknowledgements
+
+The training, evaluation, and detection utilities follow the configuration-
+driven design of the YOLO family. E2DA-SNN adds the spiking layers, DAEB, CFIM,
+and the associated multi-scale architecture used in the paper.
