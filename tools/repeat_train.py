@@ -33,6 +33,14 @@ METRIC_LABELS = {
 }
 
 
+def portable_path(path):
+    """Return a repository-relative path when the artifact is inside the repo."""
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path.resolve())
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
@@ -115,7 +123,7 @@ def read_records(args):
         missing = [name for name in ALL_METRICS if name not in record]
         if missing:
             raise ValueError(f"Missing metrics in {metrics_file}: {missing}")
-        record["metrics_file"] = str(metrics_file)
+        record["metrics_file"] = portable_path(metrics_file)
         records.append(record)
     return records
 

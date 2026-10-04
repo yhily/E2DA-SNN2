@@ -12,10 +12,21 @@ only to illustrate the expected image and YOLO-label formats.
 - Images used in the paper: 2,365
 - Image resolution: 640 × 640
 - Annotation format: YOLO
-- Source: [Roboflow Universe](https://universe.roboflow.com/nata-zlj1h/coffee_fob-gekr0/dataset)
+- Current provider page: [Roboflow Universe](https://universe.roboflow.com/nata-zlj1h/coffe_fobv5)
 - Dataset license reported by the source: CC BY 4.0
 
 COFFEE_FOB is the primary benchmark used for ablation and model comparison.
+The provider's current versions differ in image count and split definition from
+the historical 2,365-image study subset; they must not be presented as a
+file-identical recovery of the published benchmark.
+
+## Retained-sample recovery test
+
+`tools/reconstruct_sample_split.py` creates a deterministic 12/4/4 split from
+the 20 retained image/label pairs. Its manifest records SHA-256 hashes and
+per-class box counts. This split is only a reproducibility stress test. It is
+too small to replace the historical benchmark, and accuracy obtained from the
+public checkpoint may be affected by overlap with its original training data.
 
 ### Cherry
 

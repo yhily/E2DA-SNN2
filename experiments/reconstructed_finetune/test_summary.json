@@ -1,0 +1,77 @@
+{
+  "scope": "retained-sample recovery test; not an independent full-benchmark estimate",
+  "split": "test",
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "metrics": {
+    "precision": {
+      "n": 3,
+      "mean": 0.28101171118213214,
+      "std": 0.06653956904746798,
+      "min": 0.23467087562044564,
+      "max": 0.35725669413883254
+    },
+    "recall": {
+      "n": 3,
+      "mean": 0.424982541091749,
+      "std": 0.07349840712466037,
+      "min": 0.35314524555903865,
+      "max": 0.5000364425019973
+    },
+    "map50": {
+      "n": 3,
+      "mean": 0.2705345358835025,
+      "std": 0.013168647291503353,
+      "min": 0.25534546411582815,
+      "max": 0.2787474127859913
+    },
+    "map50_95": {
+      "n": 3,
+      "mean": 0.15271039756454327,
+      "std": 0.013769392301972699,
+      "min": 0.13681105582025288,
+      "max": 0.16072612477115789
+    }
+  },
+  "runs": [
+    {
+      "precision": 0.35725669413883254,
+      "recall": 0.35314524555903865,
+      "map50": 0.27751073074868804,
+      "map50_95": 0.13681105582025288,
+      "seed": 1,
+      "split": "test",
+      "checkpoint": "runs/reconstructed_finetune/e2da_lite_ft_seed1/weights/best.pt",
+      "preprocess_ms_per_image": 0.13273954391479492,
+      "inference_ms_per_image": 92.64129400253296,
+      "nms_ms_per_image": 2.0604729652404785
+    },
+    {
+      "precision": 0.23467087562044564,
+      "recall": 0.5000364425019973,
+      "map50": 0.2787474127859913,
+      "map50_95": 0.16059401210221907,
+      "seed": 2,
+      "split": "test",
+      "checkpoint": "runs/reconstructed_finetune/e2da_lite_ft_seed2/weights/best.pt",
+      "preprocess_ms_per_image": 0.07605552673339844,
+      "inference_ms_per_image": 83.39452743530273,
+      "nms_ms_per_image": 2.180814743041992
+    },
+    {
+      "precision": 0.25110756378711824,
+      "recall": 0.4217659352142111,
+      "map50": 0.25534546411582815,
+      "map50_95": 0.16072612477115789,
+      "seed": 3,
+      "split": "test",
+      "checkpoint": "runs/reconstructed_finetune/e2da_lite_ft_seed3/weights/best.pt",
+      "preprocess_ms_per_image": 0.13303756713867188,
+      "inference_ms_per_image": 98.98173809051514,
+      "nms_ms_per_image": 3.117680549621582
+    }
+  ]
+}

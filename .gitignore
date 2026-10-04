@@ -14,6 +14,9 @@ runs/
 # Local datasets
 COFFEE_FOB/
 Cherry/
+dataset/reconstructed_sample/*/images/
+dataset/reconstructed_sample/*/labels/
+dataset/reconstructed_sample/**/*.cache
 
 # Editors and operating systems
 .DS_Store

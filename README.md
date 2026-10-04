@@ -1,6 +1,6 @@
 # E2DA-SNN
 
-**Energy-Efficient Dual-Attention Spiking Detection via Cross-Level Feature Interaction**
+**Evidence-Preserving Low-Timestep Spiking Detection via Attention and Cross-Level Interaction**
 
 This repository contains the official PyTorch implementation of E2DA-SNN, a
 directly trained spiking object detector designed for dense, small, and
@@ -34,7 +34,7 @@ over `T=2` simulation steps before feature extraction.
 ## Repository layout
 
 ```text
-E2DA-SNN/
+E2DA-SNN2/
 ├── data/                  # dataset and hyperparameter YAML files
 ├── experiments/           # repeated-run and device-benchmark protocol
 ├── models/                # E2DA-SNN architecture and spiking layers
@@ -69,8 +69,9 @@ reported results.
 
 Two public datasets are used for evaluation:
 
-- [COFFEE_FOB](https://universe.roboflow.com/nata-zlj1h/coffee_fob-gekr0/dataset)
-  — the primary benchmark for ablation and comparison.
+- [COFFEE_FOB provider page](https://universe.roboflow.com/nata-zlj1h/coffe_fobv5)
+  — the primary benchmark family for ablation and comparison. The provider's
+  current versions are not file-identical to the historical 2,365-image split.
 - [Cherry](https://universe.roboflow.com/project-k2yri/cherry-tnrjs/dataset)
   — a secondary transfer benchmark.
 
@@ -147,6 +148,38 @@ summaries, and a generated LaTeX table under `runs/repeated/`. See
 [`experiments/README.md`](experiments/README.md) for the fixed-control protocol
 and interpretation limits.
 
+### Retained-sample recovery test
+
+The original file-level split is no longer available. The repository therefore
+includes a separate, deliberately limited recovery workflow for the 20 retained
+format samples. It must not be treated as a reconstruction of the manuscript's
+primary benchmark:
+
+```bash
+python tools/reconstruct_sample_split.py
+python tools/repeat_train.py \
+  --seeds 1 2 3 \
+  --cfg models/e2da_lite.yaml \
+  --data data/reconstructed_sample.yaml \
+  --hyp data/hyp_reconstructed_finetune.yaml \
+  --weights weights/e2da_lite_download/best.pt \
+  --epochs 15 \
+  --batch-size 2 \
+  --imgsz 256 \
+  --device cpu \
+  --deterministic \
+  --output-dir runs/reconstructed_finetune \
+  --run-prefix e2da_lite_ft \
+  --extra-args --noautoanchor
+```
+
+The split builder records sample identifiers, class counts, and SHA-256 hashes
+in `dataset/reconstructed_sample/manifest.json`. Because the public checkpoint
+may have seen some retained images during its historical training, the recovery
+test measures pipeline and seed stability only; its accuracy is not an
+independent estimate of generalization. The completed per-seed and summary
+records are published under `experiments/reconstructed_finetune/`.
+
 ## Evaluation
 
 ```bash
@@ -196,6 +229,17 @@ scope, and energy per image when power samples are available.
 
 - The public datasets contain static images; they are replicated across time
   and are not event-camera recordings.
+- The manuscript's primary comparison and ablation tables remain the original
+  single-seed experiments. A separate three-seed retained-sample recovery test
+  is reported with mean and sample standard deviation; it does not replace the
+  unavailable full-benchmark repeated runs.
+- The exact file-level manifests of the historical 7:2:1 dataset splits were
+  not preserved. Reproducing the published partition therefore requires a new,
+  explicitly versioned split manifest rather than assuming a file-identical
+  reconstruction.
+- The retained-sample recovery test contains only 20 images. It is reported
+  separately from the main tables and cannot establish statistical
+  significance or replace full-benchmark retraining.
 - The paper's energy values are operation-level estimates under a shared
   reference process. They are not wall-plug or neuromorphic-chip measurements.
 - Dataset splits, image size, hyperparameters, model YAML, and checkpoint must

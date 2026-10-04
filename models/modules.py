@@ -704,10 +704,21 @@ class DetectMultiBackend(nn.Module):
         See `export_formats` for all.
         """
         # types = [pt, jit, onnx, xml, engine, coreml, saved_model, pb, tflite, edgetpu, tfjs, paddle]
-        from export import export_formats
         from utils.downloads import is_url
 
-        sf = list(export_formats().Suffix)  # export suffixes
+        try:
+            from export import export_formats
+
+            sf = list(export_formats().Suffix)  # full exporter installation
+        except ModuleNotFoundError:
+            # The research release intentionally omits the optional exporter.
+            # Keep checkpoint evaluation self-contained while preserving the
+            # suffix order expected by the backend-selection code above.
+            sf = [
+                ".pt", ".torchscript", ".onnx", "_openvino_model", ".engine",
+                ".mlmodel", "_saved_model", ".pb", ".tflite", "_edgetpu.tflite",
+                "_web_model", "_paddle_model",
+            ]
         if not is_url(p, check=False):
             check_suffix(p, sf)  # checks
         url = urlparse(p)  # if url may be Triton inference server

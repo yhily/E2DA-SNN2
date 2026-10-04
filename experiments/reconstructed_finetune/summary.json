@@ -1,0 +1,133 @@
+{
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "standard_deviation": "sample (n-1 denominator)",
+  "metrics": {
+    "precision": {
+      "n": 3,
+      "mean": 0.1995765490938739,
+      "std": 0.025970761389303085,
+      "min": 0.1838668298384494,
+      "max": 0.22955343367019618
+    },
+    "recall": {
+      "n": 3,
+      "mean": 0.5564470671484161,
+      "std": 0.11421176834117011,
+      "min": 0.42746353180427843,
+      "max": 0.6447456350089352
+    },
+    "map50": {
+      "n": 3,
+      "mean": 0.21957949250738604,
+      "std": 0.015299505867470524,
+      "min": 0.20279742527139016,
+      "max": 0.23275033200571538
+    },
+    "map50_95": {
+      "n": 3,
+      "mean": 0.12326465698573819,
+      "std": 0.011474228572673564,
+      "min": 0.11118245129477354,
+      "max": 0.1340145973277662
+    },
+    "val_box_loss": {
+      "n": 3,
+      "mean": 0.09019602835178375,
+      "std": 0.002141108102281591,
+      "min": 0.08889065682888031,
+      "max": 0.09266705065965652
+    },
+    "val_obj_loss": {
+      "n": 3,
+      "mean": 0.10040683547655742,
+      "std": 0.006724465381364473,
+      "min": 0.09520600736141205,
+      "max": 0.10800044238567352
+    },
+    "val_cls_loss": {
+      "n": 3,
+      "mean": 0.021383304769794147,
+      "std": 0.0008852888110127192,
+      "min": 0.02040376514196396,
+      "max": 0.022126279771327972
+    }
+  },
+  "runs": [
+    {
+      "precision": 0.1838668298384494,
+      "recall": 0.6447456350089352,
+      "map50": 0.23275033200571538,
+      "map50_95": 0.1340145973277662,
+      "val_box_loss": 0.08903037756681442,
+      "val_obj_loss": 0.09801405668258667,
+      "val_cls_loss": 0.021619869396090508,
+      "seed": 1,
+      "deterministic": true,
+      "epochs_completed": 15,
+      "elapsed_seconds": 46.114086866378784,
+      "device": "cpu",
+      "torch_version": "2.9.1",
+      "cuda_version": null,
+      "configuration": "models/e2da_lite.yaml",
+      "dataset": "data/reconstructed_sample.yaml",
+      "hyperparameters": "data/hyp_reconstructed_finetune.yaml",
+      "initial_weights": "weights/e2da_lite_download/best.pt",
+      "image_size": 256,
+      "batch_size": 2,
+      "epochs_requested": 15,
+      "metrics_file": "runs/reconstructed_finetune/e2da_lite_ft_seed1/metrics.json"
+    },
+    {
+      "precision": 0.18530938377297612,
+      "recall": 0.5971320346320347,
+      "map50": 0.2231907202450525,
+      "map50_95": 0.12459692233467481,
+      "val_box_loss": 0.09266705065965652,
+      "val_obj_loss": 0.09520600736141205,
+      "val_cls_loss": 0.02040376514196396,
+      "seed": 2,
+      "deterministic": true,
+      "epochs_completed": 15,
+      "elapsed_seconds": 49.31705403327942,
+      "device": "cpu",
+      "torch_version": "2.9.1",
+      "cuda_version": null,
+      "configuration": "models/e2da_lite.yaml",
+      "dataset": "data/reconstructed_sample.yaml",
+      "hyperparameters": "data/hyp_reconstructed_finetune.yaml",
+      "initial_weights": "weights/e2da_lite_download/best.pt",
+      "image_size": 256,
+      "batch_size": 2,
+      "epochs_requested": 15,
+      "metrics_file": "runs/reconstructed_finetune/e2da_lite_ft_seed2/metrics.json"
+    },
+    {
+      "precision": 0.22955343367019618,
+      "recall": 0.42746353180427843,
+      "map50": 0.20279742527139016,
+      "map50_95": 0.11118245129477354,
+      "val_box_loss": 0.08889065682888031,
+      "val_obj_loss": 0.10800044238567352,
+      "val_cls_loss": 0.022126279771327972,
+      "seed": 3,
+      "deterministic": true,
+      "epochs_completed": 15,
+      "elapsed_seconds": 46.34163784980774,
+      "device": "cpu",
+      "torch_version": "2.9.1",
+      "cuda_version": null,
+      "configuration": "models/e2da_lite.yaml",
+      "dataset": "data/reconstructed_sample.yaml",
+      "hyperparameters": "data/hyp_reconstructed_finetune.yaml",
+      "initial_weights": "weights/e2da_lite_download/best.pt",
+      "image_size": 256,
+      "batch_size": 2,
+      "epochs_requested": 15,
+      "metrics_file": "runs/reconstructed_finetune/e2da_lite_ft_seed3/metrics.json"
+    }
+  ]
+}

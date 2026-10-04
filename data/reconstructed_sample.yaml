@@ -1,0 +1,9 @@
+# Retained-sample reproducibility stress test only. This is not the historical
+# COFFEE_FOB split used for the manuscript's primary comparison tables.
+path: dataset/reconstructed_sample
+train: train/images
+val: val/images
+test: test/images
+
+nc: 4
+names: ['overripe', 'ripe', 'semi_ripe', 'unripe']

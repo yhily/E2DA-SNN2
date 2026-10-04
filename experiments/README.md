@@ -1,8 +1,9 @@
 # Repeated-run and device-efficiency experiments
 
-This directory defines the additional experiments needed to quantify training
-variance and deployment performance. The scripts generate machine-readable
-records; they do not contain fabricated paper results.
+This directory documents repeated-run uncertainty and deployment measurement.
+The scripts generate machine-readable records, and
+`reconstructed_finetune/` contains the completed retained-sample recovery
+experiment reported in the manuscript.
 
 ## 1. Three independent training runs
 
@@ -99,3 +100,33 @@ After the scripts have produced real values, report the protocol in this form:
 Do not insert this paragraph into the manuscript until the bracketed device
 fields and the generated numerical table have been checked against the output
 files.
+
+## 4. Completed retained-sample recovery experiment
+
+The historical 2,365-image file-level split and its original run logs are no
+longer available. To test whether the released training and evaluation path
+can still be executed repeatedly, we built a deterministic 12/4/4 split from
+the 20 retained annotated samples, fine-tuned the public E2DA-SNN-Lite
+checkpoint for 15 epochs at 256 x 256 pixels, and changed only the random seed
+across seeds 1, 2, and 3. All three runs used CPU execution, batch size 2, and
+the fixed hyperparameters in `data/hyp_reconstructed_finetune.yaml`.
+
+On the four-image held-out split (80 boxes), the mean plus or minus sample
+standard deviation was:
+
+| Metric | Mean +/- sample SD |
+| --- | ---: |
+| Precision | 28.10 +/- 6.65% |
+| Recall | 42.50 +/- 7.35% |
+| mAP@0.5 | 27.05 +/- 1.32% |
+| mAP@0.5:0.95 | 15.27 +/- 1.38% |
+
+The per-seed records and summaries are under `reconstructed_finetune/`; the
+split identities, SHA-256 hashes, and class counts are recorded in
+`dataset/reconstructed_sample/manifest.json`. These numbers are a recovery
+stress test, not a replacement for the paper's historical benchmark. The test
+set has only four images, and the public checkpoint may have encountered some
+of the retained samples during its original training. The result therefore
+supports executable-path and seed-stability claims only. It does not provide
+an independent estimate of generalization or validate the historical accuracy
+table.

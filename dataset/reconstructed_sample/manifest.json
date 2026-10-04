@@ -1,0 +1,286 @@
+{
+  "purpose": "retained-sample reproducibility stress test; not a reconstruction of the historical benchmark split",
+  "split_seed": 20261003,
+  "search_objective": "class-box-distribution balance with every class represented in each split",
+  "search_score": 0.1016355038049718,
+  "class_order": [
+    "overripe",
+    "ripe",
+    "semi_ripe",
+    "unripe"
+  ],
+  "summary": {
+    "train": {
+      "images": 12,
+      "boxes": 215,
+      "class_box_counts": {
+        "overripe": 48,
+        "ripe": 26,
+        "semi_ripe": 63,
+        "unripe": 78
+      }
+    },
+    "val": {
+      "images": 4,
+      "boxes": 71,
+      "class_box_counts": {
+        "overripe": 14,
+        "ripe": 11,
+        "semi_ripe": 22,
+        "unripe": 24
+      }
+    },
+    "test": {
+      "images": 4,
+      "boxes": 80,
+      "class_box_counts": {
+        "overripe": 15,
+        "ripe": 11,
+        "semi_ripe": 25,
+        "unripe": 29
+      }
+    }
+  },
+  "records": [
+    {
+      "split": "train",
+      "sample_id": "1",
+      "image_sha256": "e8b3d0b0de5738eb539a69471772645ebae9a96b0ebdb8524079b1f8ac2f38c5",
+      "label_sha256": "618cd35c37e11cc29d1016ee7b51030c0950d227da6c609b20381fb9d17b4404",
+      "class_box_counts": {
+        "overripe": 4,
+        "ripe": 0,
+        "semi_ripe": 2,
+        "unripe": 4
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "2",
+      "image_sha256": "9d0f3b89239be48ffa240eafd9d33447112603b4de0505a63b862de9a18dd1fe",
+      "label_sha256": "0fb1fcb14ea217dfb6cd37117652ad677d8af04893a541dfb72f6f5e6ef7778b",
+      "class_box_counts": {
+        "overripe": 1,
+        "ripe": 0,
+        "semi_ripe": 5,
+        "unripe": 5
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "3",
+      "image_sha256": "c07b27a3c7646f3da34b322c86b8e4833d1a8ea85e1b4faa67b6b5e4bdb578a0",
+      "label_sha256": "58df275c750b958915b4be66e4e889aa0e7b0812e509c50cc4a826907d50d0ac",
+      "class_box_counts": {
+        "overripe": 0,
+        "ripe": 0,
+        "semi_ripe": 7,
+        "unripe": 3
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "4",
+      "image_sha256": "014b5e2cbeb6a9d2a2eeddd86ff26428bb0af42e01d6c0f6db2b632f2f793e06",
+      "label_sha256": "a796e4f2969b2e7c76eb5abf05d37af25fab0ddfd85dcc45dd0517567607b200",
+      "class_box_counts": {
+        "overripe": 8,
+        "ripe": 6,
+        "semi_ripe": 16,
+        "unripe": 17
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "7",
+      "image_sha256": "c4870082ad8eef1d1138747466480f0949b6e328380322c4cd3c4544ec176bba",
+      "label_sha256": "1055c3906edd8ba67dafd0bff40204d23b24678b80a2e32bbdb3f685a522089b",
+      "class_box_counts": {
+        "overripe": 15,
+        "ripe": 0,
+        "semi_ripe": 5,
+        "unripe": 2
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "8",
+      "image_sha256": "852901e39e483bf0487e7abe568e9c5c7d8bbd7e3d11f72082646dd847055c24",
+      "label_sha256": "baed7f8f660505104851f84685aa146aac6c5e6671f38c969dfcc49809eb164b",
+      "class_box_counts": {
+        "overripe": 2,
+        "ripe": 6,
+        "semi_ripe": 2,
+        "unripe": 6
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "9",
+      "image_sha256": "0e8f575d3ac175a7b3a886724d8f98f67f80c279d483491f39290e4035510b02",
+      "label_sha256": "859892201bf2ebf401e90ada4da3179f4edf2337f8f8b890d18cc015460064b9",
+      "class_box_counts": {
+        "overripe": 3,
+        "ripe": 6,
+        "semi_ripe": 17,
+        "unripe": 3
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "10",
+      "image_sha256": "035ecf052ea4519cc2fe2b030ca30c1687300526fbbec6bd0018f4fe2fbf429b",
+      "label_sha256": "6f429073d28b2e425c5bbc33f17675067b15920fd3cb52a8a0ccda28c8c61b21",
+      "class_box_counts": {
+        "overripe": 7,
+        "ripe": 0,
+        "semi_ripe": 5,
+        "unripe": 6
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "15",
+      "image_sha256": "af12c044fce36ba6100dd0eada2866ddc9e3cf3902ec4e38006c6f278004f698",
+      "label_sha256": "38aa9d3758fa351025e845d34566a3807f391644ce92a152ee546103509fd47c",
+      "class_box_counts": {
+        "overripe": 0,
+        "ripe": 0,
+        "semi_ripe": 0,
+        "unripe": 15
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "16",
+      "image_sha256": "d04b22a8e6a01f15db073ed0bca2b1da8ee358ab43a1665b4f6ee625b770897d",
+      "label_sha256": "b46313531bb65689d3a347b38272a55636153d5d9816edb0d072daeb512b7e28",
+      "class_box_counts": {
+        "overripe": 0,
+        "ripe": 0,
+        "semi_ripe": 0,
+        "unripe": 16
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "17",
+      "image_sha256": "061ee894a9675feab795ed798666d8debec477d0952a9889b471934199d738f1",
+      "label_sha256": "d9d0982a372292dfa6b17cb9325ee95f8b769b3230dee0792c0380e04ed98b9a",
+      "class_box_counts": {
+        "overripe": 4,
+        "ripe": 0,
+        "semi_ripe": 3,
+        "unripe": 1
+      }
+    },
+    {
+      "split": "train",
+      "sample_id": "20",
+      "image_sha256": "ccd6446c25832c7f0ab8310b3b58981b5443bb7b11384db0c7559b8f22d606de",
+      "label_sha256": "3acdd98dec02939a1807397234fdc7ddde2d1dcb19bfcf1d1bd5434d00ff2d8e",
+      "class_box_counts": {
+        "overripe": 4,
+        "ripe": 8,
+        "semi_ripe": 1,
+        "unripe": 0
+      }
+    },
+    {
+      "split": "val",
+      "sample_id": "11",
+      "image_sha256": "04470465d7322372787aa4ba8fd62f3d1a0e56e5fcce8cc194b334b25362e544",
+      "label_sha256": "c6077e83334936374e572dfc99cb3ca9c990b8c9ca757de04d0a1e6b5be9b271",
+      "class_box_counts": {
+        "overripe": 3,
+        "ripe": 9,
+        "semi_ripe": 7,
+        "unripe": 1
+      }
+    },
+    {
+      "split": "val",
+      "sample_id": "12",
+      "image_sha256": "870dfe1deab97ae1e80847704552a4fdb8a1b6ebccf5c9deabc6e2c29d24207e",
+      "label_sha256": "82552a589721e6936b6c52dd8355e2f1fa34f49343bf84d22a48bd518e52130d",
+      "class_box_counts": {
+        "overripe": 9,
+        "ripe": 0,
+        "semi_ripe": 0,
+        "unripe": 0
+      }
+    },
+    {
+      "split": "val",
+      "sample_id": "13",
+      "image_sha256": "9a4ef9aea4c18efa69aec45e006a2445c2df2c9cf07d326adb7417226498b1ac",
+      "label_sha256": "82a6217051e4ef35030a939b2462c2454f4936c09159c80bbf6fd563e4dae6c7",
+      "class_box_counts": {
+        "overripe": 2,
+        "ripe": 2,
+        "semi_ripe": 15,
+        "unripe": 8
+      }
+    },
+    {
+      "split": "val",
+      "sample_id": "14",
+      "image_sha256": "51acb450c9126d56f87a360f7dd6dd570e74dad423d7a787c1a5b760a2660321",
+      "label_sha256": "3d131d197a2d843acd3062882f930918500dc546421805936e17de1ff4341fd3",
+      "class_box_counts": {
+        "overripe": 0,
+        "ripe": 0,
+        "semi_ripe": 0,
+        "unripe": 15
+      }
+    },
+    {
+      "split": "test",
+      "sample_id": "5",
+      "image_sha256": "be120f0746a58381578ebb502c56dde21f7c240897ce4481753c338562a95df9",
+      "label_sha256": "82480d9679de992dfab6007f055d2323931addcf8fb9876653e28838da3f798f",
+      "class_box_counts": {
+        "overripe": 6,
+        "ripe": 0,
+        "semi_ripe": 0,
+        "unripe": 0
+      }
+    },
+    {
+      "split": "test",
+      "sample_id": "6",
+      "image_sha256": "f016a797aaf6858e8bf71f2c2d7f3c317596d73a0a399eb17ccb8fb6c4d48cbb",
+      "label_sha256": "25d73cdaf0a111be8fb534980d1835db982ce9efbd690e4f39bf6e7512421f7f",
+      "class_box_counts": {
+        "overripe": 0,
+        "ripe": 8,
+        "semi_ripe": 14,
+        "unripe": 12
+      }
+    },
+    {
+      "split": "test",
+      "sample_id": "18",
+      "image_sha256": "19b8f23b6ffee640ad8628009ae990a812249ee2a6b2e8730829a0e8e7407e39",
+      "label_sha256": "4a8b1f814fc2acdb29e991a55902dea9ae187f83ac6d39d1a4c840e234fd0cd3",
+      "class_box_counts": {
+        "overripe": 9,
+        "ripe": 0,
+        "semi_ripe": 1,
+        "unripe": 11
+      }
+    },
+    {
+      "split": "test",
+      "sample_id": "19",
+      "image_sha256": "561f103d200752846d2105f6cf8333185e2763470dc7dff9d7c9e08fbbe6260d",
+      "label_sha256": "55b7a057d7fd2975785cb10a963ebd542215e325a2df2640f5b8d995806fd80f",
+      "class_box_counts": {
+        "overripe": 0,
+        "ripe": 3,
+        "semi_ripe": 10,
+        "unripe": 6
+      }
+    }
+  ]
+}
